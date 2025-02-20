@@ -13,6 +13,7 @@ import cookieParser from 'cookie-parser';
 
 
 
+
 // Import routes
 import {UserRouter} from "./routes/UserRoutes.js";
 
@@ -44,6 +45,7 @@ const limiter = rateLimit({
 });
 
 app.use(limiter);
+
 
 // Routes
 app.use('/api/users', UserRouter)

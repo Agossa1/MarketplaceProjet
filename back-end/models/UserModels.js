@@ -1,5 +1,8 @@
 import mongoose from "mongoose";
 import bcrypt, {genSalt} from "bcryptjs";
+import { validatePassword } from "../utils/validators.js";
+import crypto from 'crypto';
+
 
 const UserSchema = new mongoose.Schema({
     fullName: {
@@ -44,15 +47,6 @@ const UserSchema = new mongoose.Schema({
     password: {
         type: String,
         required: [true, "Password is required"],
-        minlength: [8, "Password must be at least 8 characters long"],
-        select: false,
-        validate: {
-            validator: function(value) {
-                // At least one uppercase, one lowercase, one number, one special character
-                return /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(value);
-            },
-            message: "Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character"
-        }
     },
     avatar: String,
     isActive: {
@@ -136,23 +130,48 @@ const UserSchema = new mongoose.Schema({
 
 
 
-// Pre-save hook to hash the password before saving
+// Middleware de pré-validation
+UserSchema.pre('validate', function(next) {
+    if (this.isModified('password') && !this.password.startsWith('$2b$')) {
+        if (!validatePassword(this.password)) {
+            this.invalidate('password', 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character');
+        }
+    }
+    next();
+});
+
+ 
+UserSchema.methods.invalidateAllTokens = function() {
+    this.tokens = [];
+    return this.save();
+};
+UserSchema.methods.hasValidToken = function(token, type) {
+    const now = new Date();
+    return this.tokens.some(t => t.token === token && t.type === type && t.expiresAt > now);
+};
+// Pre-save hook pour hacher le mot de passe
 UserSchema.pre('save', async function(next) {
     if (!this.isModified('password')) return next();
+
+    console.log('Password before hashing:', this.password);
+
     try {
-        const salt = await bcrypt.genSalt(12);
+        const salt = await bcrypt.genSalt(10);
         this.password = await bcrypt.hash(this.password, salt);
+        console.log('Password hashed successfully');
         next();
     } catch (error) {
+        console.error('Error hashing password:', error);
         next(error);
     }
 });
-
 // Method to compare passwords
 UserSchema.methods.comparePassword = async function(candidatePassword) {
-    return await bcrypt.compare(candidatePassword, this.password);
+    console.log('Comparing passwords');
+    const result = await bcrypt.compare(candidatePassword, this.password);
+    console.log('Password comparison result:', result);
+    return result;
 };
-
 // Method to increment login attempts and lock account if necessary
 UserSchema.methods.incrementLoginAttempts = function() {
     this.loginAttempts += 1;
@@ -243,6 +262,15 @@ UserSchema.methods.hasValidPasetoToken = function(token, purpose) {
 
 
 
+UserSchema.methods.createPasswordResetToken = function() {
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    this.passwordResetToken = crypto
+        .createHash('sha256')
+        .update(resetToken)
+        .digest('hex');
+    this.passwordResetExpires = Date.now() + 1 * 60 * 60 * 1000; // 1 heure
+    return resetToken;
+};
 // Export the User model
 const User = mongoose.model('User', UserSchema)
 

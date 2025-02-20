@@ -1,194 +1,473 @@
 import User from "../models/UserModels.js";
 import TokenManager from "../config/tokenManager.js";
+import { validateEmail, validatePhone, validatePassword } from "../utils/validators.js";
+import logger from "../utils/logger.js";
+import { AUTH_ERRORS } from '../utils/errorMessages.js';
+import { sendEmailResetPasswordLink} from "../utils/sendEmailResePasseWord.js";
 
 // Create a new user
 const registerUser = async (req, res) => {
     const { fullName, email, phone, password } = req.body;
 
     try {
-        // Verification to user existing
-        const user = await User.findOne({ email });
-        if (user) {
-            return res.status(400).json({ error: 'User already exists' });
-        }
-
-        // Verification to phone number existing
-        const phoneUser = await User.findOne({ phone });
-        if (phoneUser) {
-            return res.status(400).json({ error: "Phone number already exists" });
-        }
-
-        // Verification to email isValid
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(email)) {
+        // Validation des entrées
+        if (!validateEmail(email)) {
             return res.status(400).json({ error: "Invalid email address" });
         }
-
-        // Verification phone number isValid
-        const phoneRegex = /^[0-9]{10}$/;
-        if (!phoneRegex.test(phone)) {
+        if (!validatePhone(phone)) {
             return res.status(400).json({ error: "Invalid phone number" });
         }
-
-        // Verification password length and format
-        const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
-        if (!passwordRegex.test(password)) {
-            return res.status(400).json({ error: "Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character" });
+        if (!validatePassword(password)) {
+            return res.status(400).json({ error: "Password does not meet security requirements" });
         }
 
-        // Create a new User
+        // Vérification de l'existence de l'utilisateur
+        const existingUser = await User.findOne({ $or: [{ email }, { phone }] });
+        if (existingUser) {
+            return res.status(400).json({ error: 'User with this email or phone already exists' });
+        }
+
+        // Création du nouvel utilisateur
         const newUser = new User({ fullName, email, phone, password });
         await newUser.save();
 
-        // Send verification email
-        // TODO: Implement email verification logic
+        // Envoi d'un email de vérification (à implémenter)
+        // await sendVerificationEmail(newUser);
 
-        // Return a success message
-        res.json({ message: "User registered successfully" });
+        logger.info(`New user registered: ${email}`);
+        res.status(201).json({ message: "User registered successfully" });
 
     } catch (error) {
-        return res.status(500).json({ error: "Error registering user", details: error.message });
+        logger.error(`Error registering user: ${error.message}`);
+        res.status(500).json({ error: "An error occurred while registering the user" });
     }
 };
 
-// Function to login a user
+// Login a user
 const loginUser = async (req, res) => {
     try {
         const { email, password } = req.body;
 
-        // Vérifier si l'utilisateur existe
+        if (!email || !password) {
+            return res.status(400).json({ error: 'Email and password are required' });
+        }
+
         const user = await User.findOne({ email }).select('+password');
         if (!user) {
-            return res.status(401).json({ error: 'Utilisateur non trouvé' });
+            logger.warn(`Login attempt with non-existent email: ${email}`);
+            return res.status(401).json({ error: 'Invalid credentials' });
         }
 
-        // Vérifier si le mot de passe correspond
-        const isMatch = await user.comparePassword(password);
+        if (user.isLocked()) {
+            logger.warn(`Attempt to login to locked account: ${email}`);
+            return res.status(401).json({ error: 'Account locked. Please try again later or reset your password.' });
+        }
+
+        let isMatch;
+        try {
+            isMatch = await user.comparePassword(password);
+        } catch (error) {
+            logger.error(`Error comparing passwords: ${error.message}`);
+            return res.status(500).json({ error: "An error occurred during authentication" });
+        }
+
         if (!isMatch) {
-            return res.status(401).json({ error: 'Mot de passe invalide' });
+            await user.incrementLoginAttempts();
+            if (user.isLocked()) {
+                logger.warn(`Account locked due to multiple failed attempts: ${email}`);
+                return res.status(401).json({ error: 'Account locked. Please try again later or reset your password.' });
+            }
+            logger.warn(`Failed login attempt for user: ${email}`);
+            return res.status(401).json({ error: 'Invalid credentials' });
         }
 
-        // Générer les tokens PASETO
+        await user.resetLoginAttempts();
+
         const accessToken = await TokenManager.generateAccessToken(user._id);
         const refreshToken = await TokenManager.generateRefreshToken(user._id);
 
-        // Sauvegarder les tokens
-        await TokenManager.saveToken(user._id, accessToken, 'access', 3600); // 1 heure
-        await TokenManager.saveToken(user._id, refreshToken, 'refresh', 604800); // 7 jours
+        await user.addToken(accessToken, 'access', 3600);
+        await user.addToken(refreshToken, 'refresh', 604800);
 
-        // Supprimer les tokens expirés
-        await TokenManager.removeExpiredTokens(user._id);
+        await user.removeExpiredTokens();
 
-        // Set the refresh token as an HTTP-only cookie
+        user.lastLogin = new Date();
+        await user.save();
+
         res.cookie('refreshToken', refreshToken, {
             httpOnly: true,
-            secure: process.env.NODE_ENV === 'production', // Use secure in production
+            secure: process.env.NODE_ENV === 'production',
             sameSite: 'strict',
-            maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+            maxAge: 7 * 24 * 60 * 60 * 1000
         });
 
+        logger.info(`User logged in successfully: ${email}`);
         res.status(200).json({
             accessToken,
-            user: { id: user._id, email: user.email, fullName: user.fullName }
+            refreshToken,
+            user: {
+                id: user._id,
+                email: user.email,
+                fullName: user.fullName,
+                role: user.role,
+                verifiedEmail: user.verifiedEmail
+            }
         });
     } catch (error) {
-        return res.status(500).json({ error: "Erreur lors de la connexion de l'utilisateur", details: error.message });
+        logger.error(`Login error: ${error.message}`);
+        res.status(500).json({ error: "An error occurred during login" });
     }
 };
 
-const refreshAccessToken = async (req, res) => {
-    console.log('Refresh token request received');
-    console.log('Request cookies:', req.cookies);
-    console.log('Request body:', req.body);
-
+// Resfreshtoken a user
+const refreshToken = async (req, res) => {
     try {
-        const refreshToken = req.cookies.refreshToken || req.body.refreshToken;
-
-        console.log('Refresh token extracted:', refreshToken);
+        const { refreshToken } = req.cookies;
 
         if (!refreshToken) {
-            console.log('No refresh token found');
-            return res.status(400).json({ error: 'Refresh token manquant' });
+            return res.status(401).json({ error: AUTH_ERRORS.TOKEN_MISSING });
         }
 
-        // Vérifier si le token commence par "v3.local." (PASETO token)
-        if (!refreshToken.startsWith('v3.local.')) {
-            console.error('Le token reçu n\'est pas un token PASETO valide');
-            return res.status(401).json({ error: 'Format de refresh token invalide' });
-        }
-
-        // Vérifier le refresh token
         let decoded;
         try {
             decoded = await TokenManager.verifyToken(refreshToken);
-            console.log('Token successfully decoded:', decoded);
-        } catch (verifyError) {
-            console.error('Erreur lors de la vérification du token:', verifyError);
-            return res.status(401).json({ error: 'Refresh token invalide' });
+        } catch (error) {
+            return res.status(401).json({ error: AUTH_ERRORS.TOKEN_INVALID });
         }
 
-        if (!decoded || decoded.type !== 'refresh') {
-            console.error('Token décodé invalide ou de mauvais type:', decoded);
-            return res.status(401).json({ error: 'Refresh token invalide' });
+        if (decoded.type !== 'refresh') {
+            return res.status(401).json({ error: AUTH_ERRORS.TOKEN_INVALID_TYPE });
         }
 
-        // Vérifier si le token est toujours valide dans la base de données
-        const isValid = await TokenManager.hasValidToken(decoded.id, refreshToken, 'refresh');
-        console.log('Token validity in database:', isValid);
+        const user = await User.findById(decoded.id);
+        if (!user) {
+            return res.status(401).json({ error: AUTH_ERRORS.TOKEN_INVALID });
+        }
 
-        if (!isValid) {
-            return res.status(401).json({ error: 'Refresh token expiré ou révoqué' });
+        const tokenExists = user.tokens.some(t => t.token === refreshToken && t.type === 'refresh');
+        if (!tokenExists) {
+            return res.status(401).json({ error: AUTH_ERRORS.TOKEN_REVOKED });
         }
 
         // Générer un nouveau access token
-        const newAccessToken = await TokenManager.generateAccessToken(decoded.id);
-        console.log('New access token generated');
+        const newAccessToken = await TokenManager.generateAccessToken(user._id);
 
-        // Sauvegarder le nouveau access token
-        await TokenManager.saveToken(decoded.id, newAccessToken, 'access', 3600); // 1 heure
-        console.log('New access token saved');
+        // Optionnel : générer un nouveau refresh token
+        const newRefreshToken = await TokenManager.generateRefreshToken(user._id);
 
-        res.status(200).json({ accessToken: newAccessToken });
+        // Mettre à jour les tokens dans la base de données
+        await user.removeToken(refreshToken);
+        await user.addToken(newAccessToken, 'access', 3600);
+        await user.addToken(newRefreshToken, 'refresh', 604800);
+
+        // Mettre à jour le cookie avec le nouveau refresh token
+        res.cookie('refreshToken', newRefreshToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'strict',
+            maxAge: 7 * 24 * 60 * 60 * 1000
+        });
+
+        logger.info(`Tokens refreshed for user: ${user.email}`);
+        res.status(200).json({
+            accessToken: newAccessToken,
+            refreshToken: newRefreshToken
+        });
     } catch (error) {
-        console.error('Erreur lors du rafraîchissement du token:', error);
-        return res.status(500).json({ error: "Erreur lors du rafraîchissement du token" });
+        logger.error(`Error refreshing token: ${error.message}`);
+        res.status(500).json({ error: "An error occurred while refreshing the token" });
     }
 };
 
-// Function to logout a user
+const verifyTokens = async (req, res) => {
+    try {
+        // Extraction automatique du token d'accès depuis le header Authorization
+        const accessToken = req.headers.authorization?.split(' ')[1];
+        
+        // Extraction automatique du refresh token depuis les cookies
+        const refreshToken = req.cookies.refreshToken;
+
+        if (!accessToken && !refreshToken) {
+            return res.status(401).json({ error: AUTH_ERRORS.TOKEN_MISSING });
+        }
+
+        let decodedAccess, decodedRefresh;
+
+        if (accessToken) {
+            try {
+                decodedAccess = await TokenManager.verifyToken(accessToken);
+            } catch (error) {
+                logger.warn(`Invalid access token: ${error.message}`);
+            }
+        }
+
+        if (refreshToken) {
+            try {
+                decodedRefresh = await TokenManager.verifyToken(refreshToken);
+            } catch (error) {
+                logger.warn(`Invalid refresh token: ${error.message}`);
+            }
+        }
+
+        if (!decodedAccess && !decodedRefresh) {
+            return res.status(401).json({ error: AUTH_ERRORS.TOKEN_INVALID });
+        }
+
+        const userId = decodedAccess?.id || decodedRefresh?.id;
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(401).json({ error: AUTH_ERRORS.TOKEN_INVALID });
+        }
+
+        let accessTokenValid = false, refreshTokenValid = false;
+
+        if (accessToken) {
+            accessTokenValid = await TokenManager.hasValidToken(user._id, accessToken, 'access');
+        }
+        if (refreshToken) {
+            refreshTokenValid = await TokenManager.hasValidToken(user._id, refreshToken, 'refresh');
+        }
+
+        if (!accessTokenValid && !refreshTokenValid) {
+            return res.status(401).json({ error: AUTH_ERRORS.TOKEN_REVOKED });
+        }
+
+        res.status(200).json({ 
+            message: "Tokens are valid", 
+            userId: user._id,
+            accessTokenValid,
+            refreshTokenValid
+        });
+    } catch (error) {
+        logger.error(`Error verifying tokens: ${error.message}`);
+        res.status(500).json({ error: "An error occurred while verifying tokens" });
+    }
+};
+
+// Verifie si l'utilisateur est connecté
+const isAuthenticated = async (req, res, next) => {
+    try {
+        // Extraction du token depuis le header de la requête
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({ error: 'Non authentifié' });
+        }
+
+        const token = authHeader.split(' ')[1];
+
+        // Vérification du token PASETO
+        let decodedToken;
+        try {
+            decodedToken = await TokenManager.verifyToken(token);
+        } catch (error) {
+            return res.status(401).json({ error: 'Token invalide ou expiré' });
+        }
+
+        // Vérification si le token est valide dans la base de données
+        const isValidToken = await TokenManager.hasValidToken(decodedToken.id, token, 'access');
+        if (!isValidToken) {
+            return res.status(401).json({ error: 'Token révoqué ou expiré' });
+        }
+
+        // Si tout est valide, on ajoute les informations de l'utilisateur à la requête
+        req.user = {
+            id: decodedToken.id,
+            // Vous pouvez ajouter d'autres informations de l'utilisateur ici si nécessaire
+        };
+
+        // Passer au middleware suivant
+        next();
+    } catch (error) {
+        logger.error('Erreur lors de la vérification de l\'authentification:', error);
+        res.status(500).json({ error: 'Erreur interne du serveur' });
+    }
+};
+
+// Function pour la deconnexion d'un utilisateur'
 const logoutUser = async (req, res) => {
     try {
-        const refreshToken = req.cookies.refreshToken || req.body.refreshToken;
+        const accessToken = req.headers.authorization?.split(' ')[1];
+        const { refreshToken } = req.cookies;
+        const logoutAll = req.query.all === 'true';
 
-        if (!refreshToken) {
-            return res.status(400).json({ error: 'Refresh token manquant' });
+        if (!accessToken && !refreshToken) {
+            return res.status(400).json({ error: AUTH_ERRORS.TOKEN_MISSING });
         }
 
-        // Vérifier le refresh token
-        const decoded = await TokenManager.verifyToken(refreshToken);
-        if (!decoded) {
-            return res.status(401).json({ error: 'Token invalide' });
+        let userId;
+        if (accessToken) {
+            try {
+                const decodedToken = await TokenManager.verifyToken(accessToken);
+                userId = decodedToken.id;
+            } catch (error) {
+                logger.warn(`Invalid access token during logout: ${error.message}`);
+            }
         }
 
-        // Supprimer le refresh token de la base de données
-        await TokenManager.removeToken(decoded.id, refreshToken);
+        if (!userId && refreshToken) {
+            try {
+                const decodedToken = await TokenManager.verifyToken(refreshToken);
+                userId = decodedToken.id;
+            } catch (error) {
+                logger.warn(`Invalid refresh token during logout: ${error.message}`);
+            }
+        }
 
-        // Effacer le cookie du refresh token
-        res.clearCookie('refreshToken');
+        if (!userId) {
+            return res.status(401).json({ error: AUTH_ERRORS.TOKEN_INVALID });
+        }
 
-        res.status(200).json({ message: 'Déconnexion réussie' });
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ error: AUTH_ERRORS.USER_NOT_FOUND });
+        }
+
+        if (logoutAll) {
+            await user.invalidateAllTokens();
+            res.clearCookie('refreshToken');
+        } else {
+            if (accessToken) {
+                await user.removeToken(accessToken);
+            }
+            if (refreshToken) {
+                await user.removeToken(refreshToken);
+                res.clearCookie('refreshToken');
+            }
+        }
+
+        logger.info(`User logged out successfully: ${user.email}${logoutAll ? ' (from all devices)' : ''}`);
+        res.status(200).json({ message: `Logged out successfully${logoutAll ? ' from all devices' : ''}` });
     } catch (error) {
-        return res.status(500).json({ error: "Erreur lors de la déconnexion", details: error.message });
+        logger.error(`Logout error: ${error.message}`);
+        res.status(500).json({ error: AUTH_ERRORS.INTERNAL_ERROR });
     }
 };
 
+
+const forgotPassword = async (req, res) => {
+    try {
+        const { email } = req.body;
+        const user = await User.findOne({ email });
+
+        if (!user) {
+            return res.status(404).json({ error: AUTH_ERRORS.USER_NOT_FOUND });
+        }
+
+        const resetToken = user.createPasswordResetToken();
+        await user.save({ validateBeforeSave: false });
+
+        const resetURL = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
+        
+        // Assurez-vous que expirationTime est un nombre entier
+        const expirationTime = 1; // 1 heure, par exemple
+
+        await sendEmailResetPasswordLink({
+            email: user.email,
+            resetToken: resetToken,
+            expirationTime: expirationTime
+        });
+
+        logger.info(`Password reset token sent to: ${email}`);
+        res.status(200).json({ message: 'Password reset token sent to email' });
+    } catch (error) {
+        logger.error(`Forget password error: ${error.message}`);
+        res.status(500).json({ error: AUTH_ERRORS.INTERNAL_ERROR });
+    }
+};
+
+// Function pour réinitialiser le mot de passe
+const resetPassword = async (req, res) => {
+    try {
+        const { token, newPassword } = req.body;
+
+        if (!token || !newPassword) {
+            return res.status(400).json({ error: AUTH_ERRORS.MISSING_FIELDS });
+        }
+
+        if (!validatePassword(newPassword)) {
+            return res.status(400).json({ error: AUTH_ERRORS.INVALID_PASSWORD });
+        }
+
+        const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
+        const user = await User.findOne({
+            passwordResetToken: hashedToken,
+            passwordResetExpires: { $gt: Date.now() }
+        });
+
+        if (!user) {
+            return res.status(400).json({ error: AUTH_ERRORS.INVALID_RESET_TOKEN });
+        }
+
+        user.password = newPassword;
+        user.passwordResetToken = undefined;
+        user.passwordResetExpires = undefined;
+        await user.save();
+
+        // Invalider tous les tokens existants
+        await user.invalidateAllTokens();
+
+        logger.info(`Password reset successful for user: ${user.email}`);
+        res.status(200).json({ message: 'Password has been reset successfully. Please log in with your new password.' });
+    } catch (error) {
+        logger.error(`Reset password error: ${error.message}`);
+        res.status(500).json({ error: AUTH_ERRORS.INTERNAL_ERROR });
+    }
+};
+
+// Function pour mettre à jour le mot de passe
+const updatePassword = async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({ error: AUTH_ERRORS.MISSING_FIELDS });
+        }
+
+        if (!validatePassword(newPassword)) {
+            return res.status(400).json({ error: AUTH_ERRORS.INVALID_PASSWORD });
+        }
+
+        const user = await User.findById(req.user.id).select('+password');
+
+        if (!user) {
+            return res.status(404).json({ error: AUTH_ERRORS.USER_NOT_FOUND });
+        }
+
+        if (!(await user.correctPassword(currentPassword, user.password))) {
+            return res.status(401).json({ error: AUTH_ERRORS.INCORRECT_PASSWORD });
+        }
+
+        if (await user.correctPassword(newPassword, user.password)) {
+            return res.status(400).json({ error: AUTH_ERRORS.SAME_PASSWORD });
+        }
+
+        user.password = newPassword;
+        await user.save();
+
+        // Invalider tous les tokens existants sauf le token actuel
+        await user.invalidateAllTokens(req.token);
+
+        logger.info(`Password updated for user: ${user.email}`);
+        res.status(200).json({ message: 'Password updated successfully. Please log in again with your new password.' });
+    } catch (error) {
+        logger.error(`Update password error: ${error.message}`);
+        res.status(500).json({ error: AUTH_ERRORS.INTERNAL_ERROR });
+    }
+};
 
 
 export {
     registerUser,
     loginUser,
-    refreshAccessToken,
+    forgotPassword,
+    resetPassword,
+    refreshToken,
+    verifyTokens,
     logoutUser,
+    isAuthenticated,
+    updatePassword,
 };
+
 
 
