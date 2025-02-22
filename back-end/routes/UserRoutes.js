@@ -1,10 +1,11 @@
 import express from 'express';
 import {
     loginUser, refreshToken, verifyTokens,
-    registerUser, logoutUser, isAuthenticated, forgotPassword, resetPassword, updatePassword
+    registerUser, logoutUser, isAuthenticated, forgotPassword, resetPassword, updatePassword, blockUser
 } from "../controllers/AuthControllers.js";
 
-import authMiddleware from "../middleware/AuthMiddleware.js";
+import { authMiddleware, checkRole} from '../middleware/AuthMiddleware.js';
+
 const router = express.Router();
 
 // register user
@@ -18,4 +19,5 @@ router.post('/authenticate', authMiddleware, isAuthenticated);
 router.post('/forgot-password', forgotPassword);
 router.post('/reset-password', resetPassword);
 router.put('/update-password', authMiddleware, isAuthenticated, updatePassword);
+router.post('/block-user/:userId', isAuthenticated, checkRole('admin'), blockUser);
 export { router as UserRouter };

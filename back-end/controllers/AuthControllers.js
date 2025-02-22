@@ -4,6 +4,9 @@ import { validateEmail, validatePhone, validatePassword } from "../utils/validat
 import logger from "../utils/logger.js";
 import { AUTH_ERRORS } from '../utils/errorMessages.js';
 import { sendEmailResetPasswordLink} from "../utils/sendEmailResePasseWord.js";
+import crypto from 'crypto';
+import { USER_STATUSES } from '../constants/enums.js';
+import { scheduleJob } from 'node-schedule';
 
 // Create a new user
 const registerUser = async (req, res) => {
@@ -66,16 +69,21 @@ const loginUser = async (req, res) => {
         let isMatch;
         try {
             isMatch = await user.comparePassword(password);
+            await user.updateLastLogin();
+            
         } catch (error) {
             logger.error(`Error comparing passwords: ${error.message}`);
             return res.status(500).json({ error: "An error occurred during authentication" });
         }
 
-        if (!isMatch) {
+               if (!isMatch) {
             await user.incrementLoginAttempts();
             if (user.isLocked()) {
                 logger.warn(`Account locked due to multiple failed attempts: ${email}`);
-                return res.status(401).json({ error: 'Account locked. Please try again later or reset your password.' });
+                return res.status(401).json({ 
+                    error: 'Account locked.', 
+                    message: user.formattedLockUntil
+                });
             }
             logger.warn(`Failed login attempt for user: ${email}`);
             return res.status(401).json({ error: 'Invalid credentials' });
@@ -110,7 +118,8 @@ const loginUser = async (req, res) => {
                 email: user.email,
                 fullName: user.fullName,
                 role: user.role,
-                verifiedEmail: user.verifiedEmail
+                verifiedEmail: user.verifiedEmail,
+                lastLogin: user.formattedLastLogin // Utilisation de la propriété virtuelle
             }
         });
     } catch (error) {
@@ -356,6 +365,7 @@ const forgotPassword = async (req, res) => {
         const resetToken = user.createPasswordResetToken();
         await user.save({ validateBeforeSave: false });
 
+        console.log('Reset token:', resetToken);
         const resetURL = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
         
         // Assurez-vous que expirationTime est un nombre entier
@@ -364,7 +374,8 @@ const forgotPassword = async (req, res) => {
         await sendEmailResetPasswordLink({
             email: user.email,
             resetToken: resetToken,
-            expirationTime: expirationTime
+            expirationTime: expirationTime,
+            resetURL: resetURL
         });
 
         logger.info(`Password reset token sent to: ${email}`);
@@ -375,16 +386,20 @@ const forgotPassword = async (req, res) => {
     }
 };
 
-// Function pour réinitialiser le mot de passe
 const resetPassword = async (req, res) => {
     try {
-        const { token, newPassword } = req.body;
+        const token = req.body.token || req.query.token;
+        const { newPassword } = req.body;
+
+        logger.info('Received reset password request');
 
         if (!token || !newPassword) {
+            logger.warn('Missing token or new password in request');
             return res.status(400).json({ error: AUTH_ERRORS.MISSING_FIELDS });
         }
 
         if (!validatePassword(newPassword)) {
+            logger.warn('Invalid new password format');
             return res.status(400).json({ error: AUTH_ERRORS.INVALID_PASSWORD });
         }
 
@@ -393,21 +408,30 @@ const resetPassword = async (req, res) => {
         const user = await User.findOne({
             passwordResetToken: hashedToken,
             passwordResetExpires: { $gt: Date.now() }
-        });
+        }).select('+password');
 
         if (!user) {
+            logger.warn('No user found with the provided reset token or token expired');
             return res.status(400).json({ error: AUTH_ERRORS.INVALID_RESET_TOKEN });
+        }
+
+        // Vérifier si le nouveau mot de passe est différent de l'ancien
+        if (await user.comparePassword(newPassword)) {
+            logger.warn(`New password is the same as the old password for user: ${user.email}`);
+            return res.status(400).json({ error: AUTH_ERRORS.SAME_PASSWORD });
         }
 
         user.password = newPassword;
         user.passwordResetToken = undefined;
         user.passwordResetExpires = undefined;
+
         await user.save();
 
         // Invalider tous les tokens existants
         await user.invalidateAllTokens();
 
-        logger.info(`Password reset successful for user: ${user.email}`);
+        logger.info(`Password successfully reset and tokens invalidated for user: ${user.email}`);
+
         res.status(200).json({ message: 'Password has been reset successfully. Please log in with your new password.' });
     } catch (error) {
         logger.error(`Reset password error: ${error.message}`);
@@ -420,43 +444,148 @@ const updatePassword = async (req, res) => {
     try {
         const { currentPassword, newPassword } = req.body;
 
+        // Extraction du token depuis le header de la requête
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            logger.warn('Missing or invalid authorization header');
+            return res.status(401).json({ error: AUTH_ERRORS.TOKEN_MISSING });
+        }
+        const token = authHeader.split(' ')[1];
+
+        // Validation des entrées
         if (!currentPassword || !newPassword) {
+            logger.warn('Missing current or new password in request');
             return res.status(400).json({ error: AUTH_ERRORS.MISSING_FIELDS });
         }
 
         if (!validatePassword(newPassword)) {
+            logger.warn('Invalid new password format');
             return res.status(400).json({ error: AUTH_ERRORS.INVALID_PASSWORD });
         }
 
-        const user = await User.findById(req.user.id).select('+password');
+        // Vérification du token et récupération de l'ID utilisateur
+        let userId;
+        try {
+            const decodedToken = await TokenManager.verifyToken(token);
+            userId = decodedToken.id;
+        } catch (error) {
+            logger.warn(`Invalid token during password update: ${error.message}`);
+            return res.status(401).json({ error: AUTH_ERRORS.TOKEN_INVALID });
+        }
 
+        // Récupération de l'utilisateur
+        const user = await User.findById(userId).select('+password');
         if (!user) {
+            logger.warn(`User not found: ${userId}`);
             return res.status(404).json({ error: AUTH_ERRORS.USER_NOT_FOUND });
         }
 
-        if (!(await user.correctPassword(currentPassword, user.password))) {
+        // Vérification du mot de passe actuel
+        const isCurrentPasswordCorrect = await user.correctPassword(currentPassword, user.password);
+        if (!isCurrentPasswordCorrect) {
+            logger.warn(`Incorrect current password for user: ${user.email}`);
             return res.status(401).json({ error: AUTH_ERRORS.INCORRECT_PASSWORD });
         }
 
-        if (await user.correctPassword(newPassword, user.password)) {
+        // Vérification que le nouveau mot de passe est différent de l'ancien
+        const isSamePassword = await user.correctPassword(newPassword, user.password);
+        if (isSamePassword) {
+            logger.warn(`New password is the same as the current password for user: ${user.email}`);
             return res.status(400).json({ error: AUTH_ERRORS.SAME_PASSWORD });
         }
 
+        // Mise à jour du mot de passe
         user.password = newPassword;
         await user.save();
 
-        // Invalider tous les tokens existants sauf le token actuel
-        await user.invalidateAllTokens(req.token);
+        // Invalidation des tokens existants sauf le token actuel
+        await user.invalidateAllTokens(token);
 
-        logger.info(`Password updated for user: ${user.email}`);
-        res.status(200).json({ message: 'Password updated successfully. Please log in again with your new password.' });
+        logger.info(`Password updated successfully for user: ${user.email}`);
+        res.status(200).json({
+            message: 'Password updated successfully. Please log in again with your new password.',
+            requireReLogin: true
+        });
     } catch (error) {
         logger.error(`Update password error: ${error.message}`);
         res.status(500).json({ error: AUTH_ERRORS.INTERNAL_ERROR });
     }
 };
 
+// Block User by id and duration
+const blockUser = async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { duration = 1440 } = req.body; // 1440 minutes = 24 hours
 
+        logger.info(`Attempting to block user ${userId} for ${duration} minutes by user ${req.user.id}`);
+
+
+
+        if (!userId) {
+            return res.status(400).json({ error: 'User ID is required' });
+        }
+
+        if (typeof duration !== 'number' || duration <= 0) {
+            return res.status(400).json({ error: 'Duration must be a positive number' });
+        }
+
+        const userToBlock = await User.findById(userId);
+        if (!userToBlock) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        if (userToBlock.status === USER_STATUSES.LOCKED) {
+            return res.status(400).json({ error: 'User is already blocked' });
+        }
+
+        // Convert duration to milliseconds
+        const blockDuration = duration * 60 * 1000;
+        const unblockDate = new Date(Date.now() + blockDuration);
+
+        userToBlock.status = USER_STATUSES.LOCKED;
+        userToBlock.lockedUntil = unblockDate;
+        await userToBlock.save();
+
+        // Schedule unblock job
+        const job = scheduleJob(unblockDate, async () => {
+            try {
+                const userToUnblock = await User.findById(userId);
+                if (userToUnblock && userToUnblock.status === USER_STATUSES.LOCKED) {
+                    userToUnblock.status = USER_STATUSES.ACTIVE;
+                    userToUnblock.lockedUntil = null;
+                    await userToUnblock.save();
+                    logger.info(`User ${userId} automatically unblocked after ${duration} minutes`);
+                }
+            } catch (error) {
+                logger.error(`Error unblocking user ${userId}: ${error.message}`);
+            }
+        });
+
+        // Store job reference for potential cancellation
+        userToBlock.unblockJobId = job.name;
+        await userToBlock.save();
+
+        // Invalidate all user's tokens
+        await userToBlock.invalidateAllTokens();
+
+        logger.info(`User ${userId} blocked for ${duration} minutes by admin ${req.user.id}`);
+        res.status(200).json({
+            message: `User blocked successfully for ${duration} minutes`,
+            unblockDate: unblockDate
+        });
+    } catch (error) {
+        logger.error(`Error blocking user: ${error.message}`);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
+// Fubction pour bannir un utilisateur
+
+
+
+
+// Export functions
 export {
     registerUser,
     loginUser,
@@ -467,6 +596,8 @@ export {
     logoutUser,
     isAuthenticated,
     updatePassword,
+    blockUser
+
 };
 
 

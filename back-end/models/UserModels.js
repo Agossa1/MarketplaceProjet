@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import bcrypt, {genSalt} from "bcryptjs";
 import { validatePassword } from "../utils/validators.js";
 import crypto from 'crypto';
+import {USER_STATUS_ARRAY, USER_STATUSES} from "../constants/enums.js";
 
 
 const UserSchema = new mongoose.Schema({
@@ -48,6 +49,11 @@ const UserSchema = new mongoose.Schema({
         type: String,
         required: [true, "Password is required"],
     },
+    status: {
+        type: String,
+        enum: USER_STATUS_ARRAY,
+        default: USER_STATUSES.ACTIVE
+    },
     avatar: String,
     isActive: {
         type: Boolean,
@@ -62,11 +68,15 @@ const UserSchema = new mongoose.Schema({
         default: 0
     },
     lockUntil: {
-        type: Date
+        type: Date,
+        default: null
     },
     passwordResetToken: String,
     passwordResetExpires: Date,
-    lastLogin: Date,
+    lastLogin:{
+        type: Date,
+        default: null
+    },
     twoFactorSecret: {
         type: String,
         select: false
@@ -129,7 +139,60 @@ const UserSchema = new mongoose.Schema({
 
 
 
+// Formatage du champ 'lastLogin'
+UserSchema.virtual('formattedLastLogin').get(function (){
+    if (this.lastLogin) {
+        const now = new Date();
+        const diffInSeconds = Math.floor((now - this.lastLogin) / 1000);
 
+        if (diffInSeconds < 60) {
+            return "connecté à l'instant";
+        } else if (diffInSeconds < 3600) {
+            const minutes = Math.floor(diffInSeconds / 60);
+            return `connecté il y a ${minutes} minute${minutes > 1 ? 's' : ''}`;
+        } else if (diffInSeconds < 86400) {
+            const hours = Math.floor(diffInSeconds / 3600);
+            return `connecté il y a ${hours} heure${hours > 1 ? 's' : ''}`;
+        } else {
+            return this.lastLogin.toLocaleString('fr-FR', {
+                day: 'numeric',
+                month: 'long',
+                year: 'numeric',
+                hour: 'numeric',
+                minute: 'numeric',
+                timeZone: 'UTC'
+            });
+        }
+    } else {
+        return "jamais connecté";
+    }
+})
+
+// Formatage du champ lockUntil
+UserSchema.virtual('formattedLockUntil').get(function() {
+    if (this.lockUntil) {
+        const now = new Date();
+        const timeLeft = this.lockUntil - now;
+
+        if (timeLeft <= 0) {
+            return "Compte débloqué";
+        }
+
+        const seconds = Math.floor(timeLeft / 1000);
+        const minutes = Math.floor(seconds / 60);
+        const hours = Math.floor(minutes / 60);
+
+        if (hours > 0) {
+            return `Compte bloqué pour encore ${hours} heure${hours > 1 ? 's' : ''} et ${minutes % 60} minute${minutes % 60 > 1 ? 's' : ''}`;
+        } else if (minutes > 0) {
+            return `Compte bloqué pour encore ${minutes} minute${minutes > 1 ? 's' : ''} et ${seconds % 60} seconde${seconds % 60 > 1 ? 's' : ''}`;
+        } else {
+            return `Compte bloqué pour encore ${seconds} seconde${seconds > 1 ? 's' : ''}`;
+        }
+    } else {
+        return "Compte non bloqué";
+    }
+});
 // Middleware de pré-validation
 UserSchema.pre('validate', function(next) {
     if (this.isModified('password') && !this.password.startsWith('$2b$')) {
@@ -171,6 +234,11 @@ UserSchema.methods.comparePassword = async function(candidatePassword) {
     const result = await bcrypt.compare(candidatePassword, this.password);
     console.log('Password comparison result:', result);
     return result;
+};
+
+// Method to generate a verification token
+UserSchema.methods.correctPassword = async function(candidatePassword, userPassword) {
+    return await bcrypt.compare(candidatePassword, userPassword);
 };
 // Method to increment login attempts and lock account if necessary
 UserSchema.methods.incrementLoginAttempts = function() {
@@ -261,7 +329,6 @@ UserSchema.methods.hasValidPasetoToken = function(token, purpose) {
 };
 
 
-
 UserSchema.methods.createPasswordResetToken = function() {
     const resetToken = crypto.randomBytes(32).toString('hex');
     this.passwordResetToken = crypto
@@ -271,6 +338,12 @@ UserSchema.methods.createPasswordResetToken = function() {
     this.passwordResetExpires = Date.now() + 1 * 60 * 60 * 1000; // 1 heure
     return resetToken;
 };
+
+// Methode de mise a jour du champ lastLogin
+UserSchema.methods.updateLastLogin = function () {
+    this.lastLogin = new Date();
+    return this.save();
+}
 // Export the User model
 const User = mongoose.model('User', UserSchema)
 

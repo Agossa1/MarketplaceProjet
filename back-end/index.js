@@ -12,10 +12,10 @@ import cookieParser from 'cookie-parser';
 
 
 
-
-
 // Import routes
 import {UserRouter} from "./routes/UserRoutes.js";
+import {ProductRouter} from "./routes/ProductRouters.js";
+import {ShopRouter} from "./routes/ShopRoutes.js";
 
 // Connect to MongoDB
 connectDB();
@@ -49,6 +49,8 @@ app.use(limiter);
 
 // Routes
 app.use('/api/users', UserRouter)
+app.use('/api/products', ProductRouter)
+app.use('/api/shops', ShopRouter)
 
 // Error handling middleware
 app.use((err, req, res, next) => {

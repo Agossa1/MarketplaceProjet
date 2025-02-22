@@ -8,7 +8,12 @@ const ProductSchema = new mongoose.Schema({
     trim: true,
     maxlength: [100, 'Product name cannot exceed 100 characters']
   },
-  slug: String,
+  slug: {
+    type: String,
+    lowercase: true,
+    unique: true,
+    index: true
+  },
   description: { 
     type: String, 
     required: [true, 'Product description is required'],
@@ -44,7 +49,7 @@ const ProductSchema = new mongoose.Schema({
   brand: String,
   seller: { 
     type: mongoose.Schema.Types.ObjectId, 
-    ref: 'User', 
+    ref: 'Shops',
     required: [true, 'Seller information is required']
   },
   images: [{ 
