@@ -1,97 +1,168 @@
 import Product from '../models/ProductModels.js';
 import Shop from '../models/ShopModels.js';
 import logger from '../utils/logger.js';
-import *as  cloudinary from '../utils/cloudinary.js'; // Assurez-vous d'avoir configuré Cloudinary
+import {AppError}from '../utils/errorMessages.js';
+import * as cloudinary from '../utils/cloudinary.js';
 
-
-const createProduct = async (req, res) => {
+const createProduct = async (req, res, next) => {
+    const imageUrls = [];
     try {
         const {
-            name, description, price, discountPercentage, stock,
-            category, subCategory, brand, features, dimensions,
-            weight, tags, sellerId
+            name, description, price, stock, category, subcategory,
+            brand, features, dimensions, weight, quantity, tags, shopId,
+            discountPercentage, isAvailable
         } = req.body;
+        const userId = req.user.id;
 
-        // Validation de base
-        if (!name || !description || !price || !stock || !category || !sellerId) {
-            return res.status(400).json({ message: 'Missing required fields' });
+        logger.info(`Creating product for User ID: ${userId}, Shop ID: ${shopId}`);
+
+        if (!shopId) {
+            return next(new AppError("L'ID de la boutique est requis", 400));
         }
 
-        // Vérifier si le vendeur (shop) existe
-        const shop = await Shop.findById(sellerId);
+        const shop = await Shop.findOne({ _id: shopId, owner: userId });
         if (!shop) {
-            return res.status(404).json({ message: 'Seller not found' });
+            return next(new AppError("Vous n'êtes pas autorisé à créer un produit pour cette boutique", 403));
         }
 
-        // Créer une nouvelle instance de produit
+        logger.info(`Shop found: ${shop._id}`);
+
+        if (!name || !description || !price || !stock || !category) {
+            return next(new AppError("Veuillez fournir tous les champs requis", 400));
+        }
+
+        if (req.files && req.files.length > 0) {
+            const uploadPromises = req.files.map(file => 
+                cloudinary.cloudinaryUploadImg(file.buffer, { folder: "products" })
+            );
+
+            const uploadResults = await Promise.allSettled(uploadPromises);
+
+            uploadResults.forEach((result, index) => {
+                if (result.status === 'fulfilled') {
+                    imageUrls.push({
+                        url: result.value.url,
+                        publicId: result.value.public_id,
+                        alt: `Product Image ${index + 1}`
+                    });
+                    logger.info(`Image ${index + 1} uploaded successfully: ${result.value.url}`);
+                } else {
+                    logger.error(`Failed to upload image ${index + 1}:`, result.reason);
+                }
+            });
+
+            if (imageUrls.length === 0) {
+                return next(new AppError("Aucune image n'a pu être téléchargée. Veuillez réessayer.", 500));
+            }
+        }
+
         const newProduct = new Product({
             name,
             description,
             price,
             stock,
             category,
-            seller: sellerId,
-            subCategory,
+            shop: shopId,
+            subcategory,
             brand,
             features,
             dimensions,
             weight,
-            tags
+            quantity,
+            tags: tags || [],
+            images: imageUrls,
+            discountPercentage,
+            isAvailable: isAvailable !== undefined ? isAvailable : true
         });
 
-        // Ajouter le pourcentage de réduction si fourni
-        if (discountPercentage) {
-            newProduct.discountPercentage = discountPercentage;
-        }
-
-        // Gérer les images avec Cloudinary
-        if (req.body.images && req.body.images.length > 0) {
-            newProduct.images = req.body.images.map(image => ({
-                url: image.url,
-                alt: image.alt || 'Product Image',
-                public_id: image.publicId
-            }));
-        }
-
-        // Sauvegarder le produit
         const savedProduct = await newProduct.save();
 
-        // Ajouter le produit à la liste des produits du vendeur
         shop.products.push(savedProduct._id);
         await shop.save();
 
-        logger.info(`New product created: ${savedProduct._id} for seller: ${sellerId}`);
+        logger.info(`New product created: ${savedProduct._id} for seller: ${shopId}`);
         res.status(201).json({
-            message: 'Product created successfully',
-            product: savedProduct
+            success: true,
+            message: 'Produit créé avec succès et ajouté à la boutique',
+            product: {
+                _id: savedProduct._id,
+                name: savedProduct.name,
+                description: savedProduct.description,
+                price: savedProduct.price,
+                stock: savedProduct.stock,
+                category: savedProduct.category,
+                subcategory: savedProduct.subcategory,
+                brand: savedProduct.brand,
+                features: savedProduct.features,
+                dimensions: savedProduct.dimensions,
+                weight: savedProduct.weight,
+                quantity: savedProduct.quantity,
+                tags: savedProduct.tags,
+                images: savedProduct.images,
+                discountPercentage: savedProduct.discountPercentage,
+                isAvailable: savedProduct.isAvailable,
+                shop: savedProduct.shop,
+                createdAt: savedProduct.createdAt,
+                updatedAt: savedProduct.updatedAt
+            }
         });
     } catch (error) {
         logger.error(`Error creating product: ${error.message}`);
-        if (error.name === 'ValidationError') {
-            return res.status(400).json({ message: error.message });
+        logger.error(`Stack trace: ${error.stack}`);
+
+        if (imageUrls.length > 0) {
+            const deletePromises = imageUrls.map(image => 
+                cloudinary.cloudinary.uploader.destroy(image.publicId)
+            );
+
+            Promise.allSettled(deletePromises).then(results => {
+                results.forEach((result, index) => {
+                    if (result.status === 'rejected') {
+                        logger.error(`Failed to delete image ${index + 1}:`, result.reason);
+                    }
+                });
+            });
         }
-        res.status(500).json({ message: 'Error creating product', error: error.message });
+
+        next(new AppError(`Erreur lors de la création du produit: ${error.message}`, 500));
     }
 };
 
-
-
 // Get all products
-const getAllProducts = async (req, res) => {
+const getAllProducts = async (req, res, next) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const startIndex = (page - 1) * limit;
 
-        const totalProducts = await Product.countDocuments();
-        const products = await Product.find()
+        // Add filtering options
+        const filter = {};
+        if (req.query.category) filter.category = req.query.category;
+        if (req.query.subcategory) filter.subcategory = req.query.subcategory;
+        if (req.query.minPrice) filter.price = { $gte: parseFloat(req.query.minPrice) };
+        if (req.query.maxPrice) filter.price = { ...filter.price, $lte: parseFloat(req.query.maxPrice) };
+
+        // Add sorting options
+        const sort = {};
+        if (req.query.sortBy) {
+            const sortField = req.query.sortBy;
+            const sortOrder = req.query.sortOrder === 'desc' ? -1 : 1;
+            sort[sortField] = sortOrder;
+        } else {
+            sort.createdAt = -1; // Default sort
+        }
+
+        const totalProducts = await Product.countDocuments(filter);
+        const products = await Product.find(filter)
             .skip(startIndex)
             .limit(limit)
-            .sort({ createdAt: -1 });
+            .sort(sort)
+            .select('-__v'); // Exclude the version key
 
         logger.info(`Retrieved ${products.length} products (page ${page})`);
 
         res.status(200).json({
+            success: true,
             products,
             currentPage: page,
             totalPages: Math.ceil(totalProducts / limit),
@@ -99,74 +170,107 @@ const getAllProducts = async (req, res) => {
         });
     } catch (error) {
         logger.error(`Error fetching products: ${error.message}`);
-        res.status(500).json({ message: 'Error fetching products', error: error.message });
+        next(new AppError('Error fetching products', 500));
     }
 };
 
 // Get a single product by ID
-const getProductById = async (req, res) => {
+const getProductById = async (req, res, next) => {
     try {
         const { id } = req.params;
 
-        const product = await Product.findById(id);
+        const product = await Product.findById(id)
+            .populate('shop', 'name') // Populate shop information
+            .lean(); // Use lean() for better performance if you don't need a full Mongoose document
 
         if (!product) {
             logger.warn(`Product not found: ${id}`);
-            return res.status(404).json({ message: 'Product not found' });
+            return next(new AppError('Product not found', 404));
+        }
+
+        // Add a field to show if the product is in stock
+        product.inStock = product.stock > 0;
+
+        // Calculate discount price if there's a discount percentage
+        if (product.discountPercentage) {
+            product.discountedPrice = product.price * (1 - product.discountPercentage / 100);
         }
 
         logger.info(`Retrieved product: ${id}`);
-        res.status(200).json(product);
+        res.status(200).json({
+            success: true,
+            product
+        });
     } catch (error) {
-        if (error.kind === 'ObjectId') {
+        if (error.name === 'CastError') {
             logger.warn(`Invalid product ID format: ${req.params.id}`);
-            return res.status(400).json({ message: 'Invalid product ID format' });
+            return next(new AppError('Invalid product ID format', 400));
         }
         logger.error(`Error fetching product: ${error.message}`);
-        res.status(500).json({ message: 'Error fetching product', error: error.message });
+        next(new AppError('Error fetching product', 500));
     }
 };
+
+
 // Update a product by ID
-const updateProductById = async (req, res) => {
+const updateProductById = async (req, res, next) => {
     try {
         const { id } = req.params;
-        const { name, description, price, category, subCategory, stock } = req.body;
+        const updateData = req.body;
 
-        // Find the product
-        const product = await Product.findById(id);
+        // Préparez les données de mise à jour
+        const updateFields = {};
+        const allowedFields = ['name', 'description', 'price', 'category', 'subcategory', 'stock', 'discountPercentage', 'isAvailable'];
+        
+        allowedFields.forEach(field => {
+            if (updateData[field] !== undefined) {
+                updateFields[field] = updateData[field];
+            }
+        });
 
-        if (!product) {
-            logger.warn(`Product not found for update: ${id}`);
-            return res.status(404).json({ message: 'Product not found' });
+        // Gérer la mise à jour des image
+        if (updateData.image) {
+            updateFields.$push = { images: updateData.image };
+        } else if (updateData.images && updateData.images.length > 0) {
+            updateFields.$push = { images: { $each: updateData.images } };
         }
 
-        // Update fields if they are provided
-        if (name) product.name = name;
-        if (description) product.description = description;
-        if (price) product.price = price;
-        if (category) product.category = category;
-        if (subCategory) product.subCategory = subCategory;
-        if (stock !== undefined) product.stock = stock;
+        // Trouver et mettre à jour le produit
+        const updatedProduct = await Product.findByIdAndUpdate(
+            id,
+            updateFields,
+            { new: true, runValidators: true }
+        );
 
-        // Save the updated product
-        const updatedProduct = await product.save();
+        if (!updatedProduct) {
+            logger.warn(`Product not found for update: ${id}`);
+            return next(new AppError('Product not found', 404));
+        }
 
-        logger.info(`Product updated: ${id}`);
+        logger.info(`Product updated successfully: ${id}`);
         res.status(200).json({
+            success: true,
             message: 'Product updated successfully',
             product: updatedProduct
         });
     } catch (error) {
-        if (error.kind === 'ObjectId') {
+        if (error.name === 'CastError') {
             logger.warn(`Invalid product ID format: ${req.params.id}`);
-            return res.status(400).json({ message: 'Invalid product ID format' });
+            return next(new AppError('Invalid product ID format', 400));
+        }
+        if (error.name === 'ValidationError') {
+            logger.warn(`Validation error updating product: ${error.message}`);
+            return next(new AppError(`Validation error: ${error.message}`, 400));
         }
         logger.error(`Error updating product: ${error.message}`);
-        res.status(500).json({ message: 'Error updating product', error: error.message });
+        next(new AppError(`Error updating product: ${error.message}`, 500));
     }
 };
 
 // Delete a product by ID
+
+
+
 const deleteProductById = async (req, res) => {
     try {
         const { id } = req.params;
@@ -197,32 +301,66 @@ const deleteProductById = async (req, res) => {
 // Search for products by name or description
 const searchProducts = async (req, res) => {
     try {
-        const { query } = req.query;
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const startIndex = (page - 1) * limit;
+        const { 
+            query, 
+            category, 
+            subcategory, 
+            minPrice, 
+            maxPrice, 
+            sortBy, 
+            sortOrder,
+            page = 1,
+            limit = 10
+        } = req.query;
 
-        if (!query) {
-            return res.status(400).json({ message: 'Search query is required' });
+        const startIndex = (parseInt(page) - 1) * parseInt(limit);
+
+        // Construire la requête de recherche
+        let searchQuery = {};
+
+        if (query) {
+            searchQuery.$text = { $search: query };
         }
 
-        const searchQuery = { $text: { $search: query } };
+        if (category) {
+            searchQuery.category = category;
+        }
+
+        if (subcategory) {
+            searchQuery.subcategory = subcategory;
+        }
+
+        if (minPrice || maxPrice) {
+            searchQuery.price = {};
+            if (minPrice) searchQuery.price.$gte = parseFloat(minPrice);
+            if (maxPrice) searchQuery.price.$lte = parseFloat(maxPrice);
+        }
+
+        // Construire les options de tri
+        let sortOptions = {};
+        if (sortBy) {
+            sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1;
+        } else {
+            // Tri par défaut
+            sortOptions = { score: { $meta: 'textScore' } };
+        }
+
         const totalProducts = await Product.countDocuments(searchQuery);
         const products = await Product.find(searchQuery)
             .skip(startIndex)
-            .limit(limit)
-            .sort({ score: { $meta: 'textScore' } });
+            .limit(parseInt(limit))
+            .sort(sortOptions);
 
-        logger.info(`Search query "${query}" returned ${products.length} results (page ${page})`);
+        logger.info(`Advanced search returned ${products.length} results (page ${page})`);
 
         res.status(200).json({
             products,
-            currentPage: page,
-            totalPages: Math.ceil(totalProducts / limit),
+            currentPage: parseInt(page),
+            totalPages: Math.ceil(totalProducts / parseInt(limit)),
             totalProducts
         });
     } catch (error) {
-        logger.error(`Error searching products: ${error.message}`);
+        logger.error(`Error in advanced product search: ${error.message}`);
         res.status(500).json({ message: 'Error searching products', error: error.message });
     }
 };

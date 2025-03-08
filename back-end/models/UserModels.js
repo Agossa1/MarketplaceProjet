@@ -1,6 +1,8 @@
 import mongoose from "mongoose";
 import bcrypt, {genSalt} from "bcryptjs";
 import { validatePassword } from "../utils/validators.js";
+import Shop from "./ShopModels.js";
+import Order from "./OrdersModels.js";
 import crypto from 'crypto';
 import {USER_STATUS_ARRAY, USER_STATUSES} from "../constants/enums.js";
 
@@ -33,10 +35,10 @@ const UserSchema = new mongoose.Schema({
         }
     },
     role: {
-        type: String,
-        enum: ['buyer', 'seller', 'admin'],
-        default: 'buyer'
-    },
+    type: [String],
+    enum: ['buyer', 'seller', 'admin'],
+    default: ['buyer']
+},
     wishList: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Product'
@@ -44,6 +46,10 @@ const UserSchema = new mongoose.Schema({
     orderHistory: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Order'
+    }],
+    cart: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Cart'
     }],
     password: {
         type: String,
@@ -54,7 +60,15 @@ const UserSchema = new mongoose.Schema({
         enum: USER_STATUS_ARRAY,
         default: USER_STATUSES.ACTIVE
     },
-    avatar: String,
+  avatar: {
+    type: String,
+    default: 'default.png'
+    },
+    bio: {
+        type: String,
+        maxlength: [500, "Bio cannot exceed 500 characters"]
+
+        },
     isActive: {
         type: Boolean,
         default: true
@@ -70,6 +84,10 @@ const UserSchema = new mongoose.Schema({
     lockUntil: {
         type: Date,
         default: null
+    },
+    shops: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Shop'
     },
     passwordResetToken: String,
     passwordResetExpires: Date,
@@ -264,8 +282,11 @@ UserSchema.methods.isLocked = function() {
 
 // Method to add a token
 UserSchema.methods.addToken = function(token, type, expiresIn) {
-    const expiresAt = new Date(Date.now() + expiresIn * 1000);
-    this.tokens.push({ token, type, expiresAt });
+    this.tokens.push({
+        token,
+        type,
+        expiresAt: new Date(Date.now() + expiresIn * 1000)
+    });
     return this.save();
 };
 
@@ -344,6 +365,26 @@ UserSchema.methods.updateLastLogin = function () {
     this.lastLogin = new Date();
     return this.save();
 }
+// Fonction pour récupérer les shops d'un utilisateur
+UserSchema.methods.getShops = async function () {
+    try {
+        return await Shop.find({ owner: this._id }).lean();
+    } catch (error) {
+        console.error('Erreur lors de la récupération des shops:', error);
+        throw error;
+    }
+};
+
+// Fonction pour récupérer les commandes d'un utilisateur
+UserSchema.methods.getOrders = async function () {
+    try {
+        return await Order.find({ user: this._id }).lean();
+    } catch (error) {
+        console.error('Erreur lors de la récupération des commandes:', error);
+        throw error;
+    }
+};
+
 // Export the User model
 const User = mongoose.model('User', UserSchema)
 

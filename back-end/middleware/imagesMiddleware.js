@@ -1,13 +1,6 @@
 import { AppError } from '../utils/errorMessages.js';
 import multer from 'multer';
-import sharp from 'sharp';
-import { fileURLToPath } from 'url';
-import path from 'path';
-import fs from 'fs';
-import { cloudinaryUploadImg } from '../utils/cloudinary.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { cloudinaryUploadImg, cloudinaryUploadLogo, cloudinaryUploadCoverImage } from '../utils/cloudinary.js';
 
 // Configure Multer Storage
 const multerStorage = multer.memoryStorage();
@@ -27,60 +20,86 @@ const upload = multer({
     limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB
 });
 
-// Image Resizing and Upload Middleware
 const processAndUploadImages = async (req, res, next) => {
     try {
-        if (!req.files && !req.file) return next();
-
-        const files = req.files || [req.file];
-        req.body.images = [];
-
-        const tempDir = path.join(__dirname, 'temp');
-
-        if (!fs.existsSync(tempDir)) {
-            await fs.promises.mkdir(tempDir);
+        if (!req.files && !req.file) {
+            console.log('Aucune image n\'a été téléchargée, continuation du processus');
+            return next();
         }
 
-        for (const file of files) {
-            const filename = `product-${Date.now()}-${files.indexOf(file) + 1}.jpeg`;
-            const tempFilePath = path.join(tempDir, filename);
+        const uploadPromises = [];
 
-            // Resize image
-            await sharp(file.buffer)
-                .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
-                .toFormat('jpeg')
-                .jpeg({ quality: 90 })
-                .toFile(tempFilePath);
+        // Fonction helper pour uploader une image
+        const uploadImage = async (file, uploadFunction, bodyField) => {
+            if (file) {
+                try {
+                    const result = await uploadFunction(file.buffer);
+                    req.body[bodyField] = { url: result.url, public_id: result.public_id };
+                } catch (error) {
+                    console.error(`Erreur lors de l'upload de ${bodyField}:`, error);
+                }
+            }
+        };
 
-            // Upload to Cloudinary
-            try {
-                const result = await cloudinaryUploadImg(tempFilePath);
-                req.body.images.push({
-                    url: result.url,
-                    publicId: result.public_id,
-                });
-            } catch (error) {
-                console.error('Error uploading image to Cloudinary:', error.message);
-                throw new AppError('Error uploading image to Cloudinary', 500);
-            } finally {
-                // Delete the temporary file
-                await fs.promises.unlink(tempFilePath);
+        // Traitement du logo de la boutique
+        await uploadImage(req.files?.shopLogo?.[0], cloudinaryUploadLogo, 'shopLogo');
+
+        // Traitement de l'image de couverture
+        await uploadImage(req.files?.coverImage?.[0], cloudinaryUploadCoverImage, 'coverImage');
+
+        // Traitement des autres images
+        const otherImages = req.files?.images || (req.file ? [req.file] : []);
+        req.body.images = [];
+        for (const file of otherImages) {
+            await uploadImage(file, cloudinaryUploadImg, 'currentImage');
+            if (req.body.currentImage) {
+                req.body.images.push(req.body.currentImage);
+                delete req.body.currentImage;
             }
         }
 
+        console.log('Images traitées et ajoutées à req.body');
         next();
     } catch (error) {
-        console.error('Error processing and uploading images:', error.message);
-        next(new AppError('Error processing and uploading images', 500));
+        console.error('Erreur lors du traitement des images:', error);
+        next(new AppError('Erreur lors du traitement des images', 500));
     }
 };
 
-export const processMultipleImages = (fieldName = 'images') => [
-    upload.array(fieldName, 10),
+export const processMultipleImages = (shopIdField = 'shopId') => [
+    (req, res, next) => {
+        console.log('Incoming request fields:', Object.keys(req.body));
+        console.log('Incoming files:', req.files ? Object.keys(req.files) : 'No files');
+        if (req.query[shopIdField]) {
+            req.body[shopIdField] = req.query[shopIdField];
+        }
+        next();
+    },
+    upload.fields([
+        { name: 'logo', maxCount: 1 },  // Changed from 'shopLogo' to 'logo'
+        { name: 'coverImage', maxCount: 1 },
+        { name: 'images', maxCount: 10 }
+    ]),
+    (error, req, res, next) => {
+        if (error instanceof multer.MulterError) {
+            console.error('Multer error:', error);
+            return res.status(400).json({ error: error.message });
+        } else if (error) {
+            console.error('Unknown error:', error);
+            return res.status(500).json({ error: 'An unexpected error occurred during file upload.' });
+        }
+        next();
+    },
     processAndUploadImages,
 ];
 
-export const processSingleImage = (fieldName = 'image') => [
+export const processSingleImage = (fieldName = 'image', shopIdField = 'shopId') => [
+    (req, res, next) => {
+        if (req.query[shopIdField]) {
+            req.body[shopIdField] = req.query[shopIdField];
+        }
+        next();
+    },
     upload.single(fieldName),
     processAndUploadImages,
 ];

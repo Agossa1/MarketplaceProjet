@@ -5,19 +5,21 @@ const ReviewSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'User', 
     required: [true, 'User reference is required'],
-    index: true
   },
-  product: { 
+  reviewedItem: { 
     type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Product', 
-    required: [true, 'Product reference is required'],
-    index: true
+    required: [true, 'Reviewed item reference is required'],
+    refPath: 'itemType',
+  },
+  itemType: {
+    type: String,
+    required: true,
+    enum: ['Product', 'Shop'],
   },
   order: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Order',
-    required: [true, 'Order reference is required'],
-    index: true
+    required: function() { return this.itemType === 'Product'; },
   },
   rating: { 
     type: Number, 
@@ -66,7 +68,7 @@ const ReviewSchema = new mongoose.Schema({
 });
 
 // Indexes for better query performance
-ReviewSchema.index({ product: 1, createdAt: -1 });
+ReviewSchema.index({ reviewedItem: 1, createdAt: -1 });
 ReviewSchema.index({ user: 1, createdAt: -1 });
 
 // Virtual for calculating the age of the review
@@ -74,10 +76,10 @@ ReviewSchema.virtual('age').get(function() {
   return Math.floor((Date.now() - this.createdAt) / (1000 * 60 * 60 * 24));
 });
 
-// Static method to get average rating for a product
-ReviewSchema.statics.getAverageRating = async function(productId) {
+// Static method to get average rating for a product or shop
+ReviewSchema.statics.getAverageRating = async function(itemId, itemType) {
   const result = await this.aggregate([
-    { $match: { product: productId, status: 'approved' } },
+    { $match: { reviewedItem: itemId, itemType: itemType, status: 'approved' } },
     { $group: { _id: null, averageRating: { $avg: '$rating' } } }
   ]);
   return result[0]?.averageRating || 0;
@@ -89,13 +91,13 @@ ReviewSchema.methods.markHelpful = function() {
   return this.save();
 };
 
-// Pre-save middleware to verify purchase
+// Pre-save middleware to verify purchase for product reviews
 ReviewSchema.pre('save', async function(next) {
-  if (this.isNew) {
+  if (this.isNew && this.itemType === 'Product') {
     const Order = mongoose.model('Order');
     const order = await Order.findOne({
       user: this.user,
-      'items.product': this.product,
+      'items.product': this.reviewedItem,
       status: 'completed'
     });
     this.verifiedPurchase = !!order;
@@ -103,10 +105,14 @@ ReviewSchema.pre('save', async function(next) {
   next();
 });
 
-// Post-save middleware to update product's average rating
+// Post-save middleware to update product's or shop's average rating
 ReviewSchema.post('save', async function() {
-  const averageRating = await this.constructor.getAverageRating(this.product);
-  await mongoose.model('Product').findByIdAndUpdate(this.product, { averageRating });
+  const averageRating = await this.constructor.getAverageRating(this.reviewedItem, this.itemType);
+  if (this.itemType === 'Product') {
+    await mongoose.model('Product').findByIdAndUpdate(this.reviewedItem, { averageRating });
+  } else if (this.itemType === 'Shop') {
+    await mongoose.model('Shop').findByIdAndUpdate(this.reviewedItem, { rating: averageRating });
+  }
 });
 
 const Review = mongoose.model('Review', ReviewSchema);

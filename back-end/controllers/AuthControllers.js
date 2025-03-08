@@ -27,18 +27,46 @@ const registerUser = async (req, res) => {
         // Vérification de l'existence de l'utilisateur
         const existingUser = await User.findOne({ $or: [{ email }, { phone }] });
         if (existingUser) {
-            return res.status(400).json({ error: 'User with this email or phone already exists' });
+            if (existingUser.email === email) {
+                return res.status(400).json({ error: 'email already in use' });
+            }else{
+                return res.status(400).json({ error: 'phone already in use' });
+            }
         }
 
         // Création du nouvel utilisateur
         const newUser = new User({ fullName, email, phone, password });
         await newUser.save();
 
+        // Génération des tokens
+        const accessToken = await TokenManager.generateAccessToken(newUser._id);
+        const refreshToken = await TokenManager.generateRefreshToken(newUser._id);
+
+        // Ajout des tokens à l'utilisateur
+        await newUser.addToken(accessToken, 'access', 3600);
+        await newUser.addToken(refreshToken, 'refresh', 604800);
+
         // Envoi d'un email de vérification (à implémenter)
         // await sendVerificationEmail(newUser);
 
         logger.info(`New user registered: ${email}`);
-        res.status(201).json({ message: "User registered successfully" });
+
+        // Réponse avec les données de l'utilisateur et les tokens
+        res.status(201).json({
+            message: "User registered successfully",
+            user: {
+                id: newUser._id,
+                email: newUser.email,
+                fullName: newUser.fullName,
+                phone: newUser.phone,
+                avatar: newUser.avatar || 'default.png',
+                bio: newUser.bio,
+                role: Array.isArray(newUser.role) ? newUser.role : [newUser.role],
+                verifiedEmail: newUser.verifiedEmail
+            },
+            accessToken,
+            refreshToken
+        });
 
     } catch (error) {
         logger.error(`Error registering user: ${error.message}`);
@@ -61,46 +89,58 @@ const loginUser = async (req, res) => {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
-        if (user.isLocked()) {
+        if (user.isLocked && user.isLocked()) {
             logger.warn(`Attempt to login to locked account: ${email}`);
             return res.status(401).json({ error: 'Account locked. Please try again later or reset your password.' });
         }
 
-        let isMatch;
+        let isMatch = false;
         try {
             isMatch = await user.comparePassword(password);
-            await user.updateLastLogin();
-            
         } catch (error) {
             logger.error(`Error comparing passwords: ${error.message}`);
-            return res.status(500).json({ error: "An error occurred during authentication" });
+            return res.status(500).json({ error: "An error occurred during password comparison" });
         }
 
-               if (!isMatch) {
-            await user.incrementLoginAttempts();
-            if (user.isLocked()) {
-                logger.warn(`Account locked due to multiple failed attempts: ${email}`);
-                return res.status(401).json({ 
-                    error: 'Account locked.', 
-                    message: user.formattedLockUntil
-                });
+        if (!isMatch) {
+            if (user.incrementLoginAttempts) {
+                await user.incrementLoginAttempts();
+                if (user.isLocked && user.isLocked()) {
+                    logger.warn(`Account locked due to multiple failed attempts: ${email}`);
+                    return res.status(401).json({
+                        error: 'Account locked.',
+                        message: user.formattedLockUntil
+                    });
+                }
             }
             logger.warn(`Failed login attempt for user: ${email}`);
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
-        await user.resetLoginAttempts();
+        if (user.resetLoginAttempts) {
+            await user.resetLoginAttempts();
+        }
+
+        if (user.updateLastLogin) {
+            try {
+                await user.updateLastLogin();
+            } catch (error) {
+                logger.error(`Error updating last login: ${error.message}`);
+                // Continue with login process even if updating last login fails
+            }
+        }
 
         const accessToken = await TokenManager.generateAccessToken(user._id);
         const refreshToken = await TokenManager.generateRefreshToken(user._id);
 
-        await user.addToken(accessToken, 'access', 3600);
-        await user.addToken(refreshToken, 'refresh', 604800);
+        if (user.addToken) {
+            await user.addToken(accessToken, 'access', 3600);
+            await user.addToken(refreshToken, 'refresh', 604800);
+        }
 
-        await user.removeExpiredTokens();
-
-        user.lastLogin = new Date();
-        await user.save();
+        if (user.removeExpiredTokens) {
+            await user.removeExpiredTokens();
+        }
 
         res.cookie('refreshToken', refreshToken, {
             httpOnly: true,
@@ -117,51 +157,61 @@ const loginUser = async (req, res) => {
                 id: user._id,
                 email: user.email,
                 fullName: user.fullName,
-                role: user.role,
+                phone: user.phone,
+                avatar: user.avatar || 'default.png',
+                bio: user.bio,
+                lastLogin: user.formattedLastLogin,
+                role: Array.isArray(user.role) ? user.role : [user.role],
                 verifiedEmail: user.verifiedEmail,
-                lastLogin: user.formattedLastLogin // Utilisation de la propriété virtuelle
+
             }
         });
     } catch (error) {
         logger.error(`Login error: ${error.message}`);
-        res.status(500).json({ error: "An error occurred during login" });
+        res.status(500).json({ error: `An error occurred during login: ${error.message}` });
     }
 };
 
 // Resfreshtoken a user
+
 const refreshToken = async (req, res) => {
     try {
-        const { refreshToken } = req.cookies;
+        // Récupérer le refreshToken à partir des cookies
+        const refreshToken = req.cookies.refreshToken;
 
         if (!refreshToken) {
-            return res.status(401).json({ error: AUTH_ERRORS.TOKEN_MISSING });
+            return res.status(401).json({ error: AUTH_ERRORS.TOKEN_MISSING , message: 'Token is missing' });
         }
 
         let decoded;
         try {
             decoded = await TokenManager.verifyToken(refreshToken);
         } catch (error) {
+            logger.warn(`Invalid refresh token: ${error.message}`);
             return res.status(401).json({ error: AUTH_ERRORS.TOKEN_INVALID });
         }
 
         if (decoded.type !== 'refresh') {
+            logger.warn(`Invalid token type: ${decoded.type}`);
             return res.status(401).json({ error: AUTH_ERRORS.TOKEN_INVALID_TYPE });
         }
 
         const user = await User.findById(decoded.id);
         if (!user) {
+            logger.warn(`User not found for token: ${decoded.id}`);
             return res.status(401).json({ error: AUTH_ERRORS.TOKEN_INVALID });
         }
 
         const tokenExists = user.tokens.some(t => t.token === refreshToken && t.type === 'refresh');
         if (!tokenExists) {
+            logger.warn(`Token not found in user's tokens: ${refreshToken}`);
             return res.status(401).json({ error: AUTH_ERRORS.TOKEN_REVOKED });
         }
 
         // Générer un nouveau access token
         const newAccessToken = await TokenManager.generateAccessToken(user._id);
 
-        // Optionnel : générer un nouveau refresh token
+        // Générer un nouveau refresh token
         const newRefreshToken = await TokenManager.generateRefreshToken(user._id);
 
         // Mettre à jour les tokens dans la base de données
@@ -169,18 +219,25 @@ const refreshToken = async (req, res) => {
         await user.addToken(newAccessToken, 'access', 3600);
         await user.addToken(newRefreshToken, 'refresh', 604800);
 
-        // Mettre à jour le cookie avec le nouveau refresh token
-        res.cookie('refreshToken', newRefreshToken, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict',
-            maxAge: 7 * 24 * 60 * 60 * 1000
-        });
-
         logger.info(`Tokens refreshed for user: ${user.email}`);
+
+        // Créer un objet utilisateur sans le mot de passe
+        const userWithoutPassword = {
+            id: user._id,
+            email: user.email,
+            fullName: user.fullName,
+            phone: user.phone,
+            avatar: user.avatar || 'default.png',
+            bio: user.bio,
+            lastLogin: user.formattedLastLogin,
+            role: Array.isArray(user.role) ? user.role : [user.role],
+            verifiedEmail: user.verifiedEmail,
+        };
+
         res.status(200).json({
             accessToken: newAccessToken,
-            refreshToken: newRefreshToken
+            refreshToken: newRefreshToken,
+            user: userWithoutPassword
         });
     } catch (error) {
         logger.error(`Error refreshing token: ${error.message}`);
@@ -188,11 +245,12 @@ const refreshToken = async (req, res) => {
     }
 };
 
+
 const verifyTokens = async (req, res) => {
     try {
         // Extraction automatique du token d'accès depuis le header Authorization
         const accessToken = req.headers.authorization?.split(' ')[1];
-        
+
         // Extraction automatique du refresh token depuis les cookies
         const refreshToken = req.cookies.refreshToken;
 
@@ -241,9 +299,24 @@ const verifyTokens = async (req, res) => {
             return res.status(401).json({ error: AUTH_ERRORS.TOKEN_REVOKED });
         }
 
-        res.status(200).json({ 
-            message: "Tokens are valid", 
-            userId: user._id,
+        res.status(200).json({
+            message: "Tokens are valid",
+            user: {
+                _id: user._id,
+                fullName: user.fullName,
+                email: user.email,
+                phone: user.phone,
+                role: user.role,
+                verifiedEmail: user.verifiedEmail,
+                lastLogin: user.lastLogin,
+                avatar: user.avatar || 'default.png',
+                isActive: user.isActive,
+                shop: user.shop,
+                wishList: user.wishList,
+                orderHistory: user.orderHistory,
+                cart: user.cart,
+                // Ajoutez d'autres champs pertinents ici
+            },
             accessTokenValid,
             refreshTokenValid
         });
@@ -252,39 +325,34 @@ const verifyTokens = async (req, res) => {
         res.status(500).json({ error: "An error occurred while verifying tokens" });
     }
 };
-
-// Verifie si l'utilisateur est connecté
 const isAuthenticated = async (req, res, next) => {
     try {
-        // Extraction du token depuis le header de la requête
         const authHeader = req.headers.authorization;
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
-            return res.status(401).json({ error: 'Non authentifié' });
+        if (!authHeader) {
+            return res.status(401).json({ error: 'En-tête d\'autorisation manquant' });
+        }
+        if (!authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({ error: 'Format de token invalide' });
         }
 
         const token = authHeader.split(' ')[1];
 
-        // Vérification du token PASETO
         let decodedToken;
         try {
             decodedToken = await TokenManager.verifyToken(token);
         } catch (error) {
-            return res.status(401).json({ error: 'Token invalide ou expiré' });
+            return res.status(401).json({ error: `Token invalide ou expiré: ${error.message}` });
         }
 
-        // Vérification si le token est valide dans la base de données
         const isValidToken = await TokenManager.hasValidToken(decodedToken.id, token, 'access');
         if (!isValidToken) {
             return res.status(401).json({ error: 'Token révoqué ou expiré' });
         }
 
-        // Si tout est valide, on ajoute les informations de l'utilisateur à la requête
         req.user = {
             id: decodedToken.id,
-            // Vous pouvez ajouter d'autres informations de l'utilisateur ici si nécessaire
         };
 
-        // Passer au middleware suivant
         next();
     } catch (error) {
         logger.error('Erreur lors de la vérification de l\'authentification:', error);
@@ -292,7 +360,7 @@ const isAuthenticated = async (req, res, next) => {
     }
 };
 
-// Function pour la deconnexion d'un utilisateur'
+// Function pour la deconnexion d'un utilisateur
 const logoutUser = async (req, res) => {
     try {
         const accessToken = req.headers.authorization?.split(' ')[1];
@@ -344,15 +412,13 @@ const logoutUser = async (req, res) => {
             }
         }
 
-        logger.info(`User logged out successfully: ${user.email}${logoutAll ? ' (from all devices)' : ''}`);
-        res.status(200).json({ message: `Logged out successfully${logoutAll ? ' from all devices' : ''}` });
+        logger.info(`User ${userId} logged out successfully`);
+        res.status(200).json({ message: 'Logged out successfully' });
     } catch (error) {
         logger.error(`Logout error: ${error.message}`);
         res.status(500).json({ error: AUTH_ERRORS.INTERNAL_ERROR });
     }
 };
-
-
 const forgotPassword = async (req, res) => {
     try {
         const { email } = req.body;

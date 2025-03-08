@@ -1,151 +1,131 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
+import { categories } from '../constants/categoriesProduct.js';
 import slugify from 'slugify';
 
 const ProductSchema = new mongoose.Schema({
-  name: { 
-    type: String, 
-    required: [true, 'A product name is required'],
+  name: {
+    type: String,
+    required: [true, 'Le nom du produit est requis'],
     trim: true,
-    maxlength: [100, 'Product name cannot exceed 100 characters']
+    minlength: [3, 'Le nom du produit doit contenir au moins 3 caractères'],
+    maxlength: [255, 'Le nom du produit ne peut pas dépasser 255 caractères']
   },
   slug: {
     type: String,
-    lowercase: true,
     unique: true,
-    index: true
+    lowercase: true
   },
-  description: { 
-    type: String, 
-    required: [true, 'Product description is required'],
+  description: {
+    type: String,
+    required: [true, 'La description du produit est requise'],
     trim: true,
-    maxlength: [1000, 'Description cannot exceed 1000 characters']
+    minlength: [10, 'La description doit contenir au moins 10 caractères'],
+    maxlength: [5000, 'La description ne peut pas dépasser 5000 caractères']
   },
-  price: { 
-    type: Number, 
-    required: [true, 'Price is required'], 
-    min: [0, 'Price cannot be negative'],
-    set: v => Math.round(v * 100) / 100 // Round to 2 decimal places
-  },
-  discountPercentage: {
+  price: {
     type: Number,
-    min: [0, 'Discount cannot be negative'],
-    max: [100, 'Discount cannot exceed 100%']
+    required: [true, 'Le prix du produit est requis'],
+    min: [0, 'Le prix ne peut pas être négatif']
   },
-  stock: { 
-    type: Number, 
-    required: [true, 'Stock quantity is required'], 
-    min: [0, 'Stock cannot be negative'],
+  quantity: {
+    type: Number,
+    required: [true, 'La quantité du produit est requise'],
+    min: [0, 'La quantité ne peut pas être négative']
+  },
+  category: {
+    type: String,
+    required: [true, 'La catégorie du produit est requise'],
+    enum: categories.map(cat => cat.name)
+  },
+  subcategory: {
+    type: String,
+    required: [true, 'La sous-catégorie du produit est requise'],
     validate: {
-      validator: Number.isInteger,
-      message: '{VALUE} is not an integer value for stock'
-    }
-  },
-  category: { 
-    type: String, 
-    required: [true, 'Category is required'],
-    index: true
-  },
-  subCategory: String,
-  brand: String,
-  seller: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Shops',
-    required: [true, 'Seller information is required']
-  },
-  images: [{ 
-    url: { type: String, required: true },
-    alt: String
-  }],
-  reviews: [
-    {
-      user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-      rating: { 
-        type: Number, 
-        min: 1, 
-        max: 5, 
-        required: true 
+      validator: function(v) {
+        const cat = categories.find(c => c.name === this.category);
+        return cat && cat.subcategories.includes(v);
       },
-      comment: String,
-      date: { type: Date, default: Date.now }
+      message: props => `${props.value} n'est pas une sous-catégorie valide pour la catégorie sélectionnée!`
     }
-  ],
+  },
+      images: [{
+        url: String,
+        public_id: String
+      }],
+  shop: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Shop',
+    required: [true, 'Le magasin est requis']
+  }],
+  reviews: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Review'
+  }],
+
   averageRating: {
     type: Number,
-    min: [1, 'Rating must be at least 1'],
-    max: [5, 'Rating must not be more than 5'],
-    set: function(val) {
-      if (this.reviews.length === 0) return 0;
-      const avg = this.reviews.reduce((sum, review) => sum + review.rating, 0) / this.reviews.length;
-      return Math.round(avg * 10) / 10; // Round to 1 decimal place
-    }
+    default: 0,
+    min: 0,
+    max: 5
   },
-  numReviews: {
+  totalRatings: {
     type: Number,
     default: 0
   },
-  features: [String],
-  dimensions: {
-    length: Number,
-    width: Number,
-    height: Number,
-    unit: {
-      type: String,
-      enum: ['cm', 'inch', 'm'],
-      default: 'cm'
-    }
-  },
-  weight: {
-    value: Number,
-    unit: {
-      type: String,
-      enum: ['kg', 'g', 'lb'],
-      default: 'kg'
-    }
-  },
-  isActive: {
+  isAvailable: {
     type: Boolean,
     default: true
   },
   tags: [String],
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
 }, {
-  timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
+  timestamps: true
 });
 
-// Indexing for better query performance
-ProductSchema.index({ name: 'text', description: 'text' });
-ProductSchema.index({ category: 1, subCategory: 1 });
-ProductSchema.index({ price: 1 });
 
-// Virtual for discounted price
-ProductSchema.virtual('discountedPrice').get(function() {
-  if (!this.discountPercentage) return this.price;
-  return Math.round((this.price * (100 - this.discountPercentage) / 100) * 100) / 100;
+
+// Méthode pour calculer la note moyenne
+ProductSchema.methods.calculateAverageRating = async function() {
+  const reviews = await mongoose.model('Review').find({ product: this._id });
+  const totalRating = reviews.reduce((sum, review) => sum + review.rating, 0);
+  this.averageRating = reviews.length > 0 ? totalRating / reviews.length : 0;
+  this.totalRatings = reviews.length;
+  await this.save();
+};
+
+// Middleware pour mettre à jour la note moyenne après l'ajout d'un avis
+ProductSchema.post('save', async function(doc) {
+  if (this.isModified('reviews')) {
+    await this.calculateAverageRating();
+  }
 });
 
-// Pre-save hook to create slug
-ProductSchema.pre('save', function(next) {
-  this.slug = slugify(this.name, { lower: true });
+ProductSchema.pre('save', async function(next) {
+  if (this.isModified('name') || this.isNew) {
+    let baseSlug = slugify(this.name, { lower: true, strict: true, trim: true });
+    let uniqueSlug = `${this.shop}-${baseSlug}`;
+    let counter = 1;
+
+    while (true) {
+      const existingProduct = await this.constructor.findOne({ slug: uniqueSlug });
+      if (!existingProduct) {
+        break;
+      }
+      uniqueSlug = `${this.shop}-${baseSlug}-${counter}`;
+      counter++;
+    }
+
+    this.slug = uniqueSlug;
+  }
   next();
 });
-
-// Static method to get top rated products
-ProductSchema.statics.getTopRated = function(limit = 5) {
-  return this.find({ averageRating: { $gte: 4 } })
-    .sort('-averageRating')
-    .limit(limit);
-};
-
-// Method to add a review
-ProductSchema.methods.addReview = function(userId, rating, comment) {
-  this.reviews.push({ user: userId, rating, comment });
-  this.numReviews = this.reviews.length;
-  this.averageRating = this.reviews.reduce((acc, item) => item.rating + acc, 0) / this.reviews.length;
-  return this.save();
-};
 
 const Product = mongoose.model('Product', ProductSchema);
 

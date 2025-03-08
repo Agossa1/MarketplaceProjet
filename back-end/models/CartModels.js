@@ -1,112 +1,89 @@
-import mongoose from 'mongoose';
+ import mongoose from 'mongoose';
 
 const CartItemSchema = new mongoose.Schema({
-  product: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Product', 
-    required: [true, 'Product reference is required']
+  product: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Product',
+    required: true
   },
-  quantity: { 
-    type: Number, 
-    required: [true, 'Quantity is required'], 
-    min: [1, 'Quantity must be at least 1'],
-    validate: {
-      validator: Number.isInteger,
-      message: '{VALUE} is not an integer value'
-    }
+  quantity: {
+    type: Number,
+    required: true,
+    min: 1
   },
   price: {
     type: Number,
-    required: [true, 'Price is required'],
-    min: [0, 'Price cannot be negative']
-  },
-  selectedOptions: {
-    color: String,
-    size: String,
-    // Add other product-specific options as needed
-  },
-  addedAt: { 
-    type: Date, 
-    default: Date.now 
+    required: true
   }
-});
+}, { _id: false });
 
 const CartSchema = new mongoose.Schema({
-  user: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'User', 
-    required: [true, 'User reference is required'], 
-    unique: true 
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+    unique: true
   },
   items: [CartItemSchema],
   totalQuantity: {
     type: Number,
     default: 0
   },
-  totalAmount: {
+  totalPrice: {
     type: Number,
     default: 0
-  },
-  currency: {
-    type: String,
-    default: 'USD'
-  },
-  lastUpdated: { 
-    type: Date, 
-    default: Date.now 
   }
 }, {
-  timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
+  timestamps: true
 });
 
-// Index for better query performance
-CartSchema.index({ user: 1 });
 
-// Virtual for item count
-CartSchema.virtual('itemCount').get(function() {
-  return this.items.length;
-});
 
-// Pre-save hook to update totals
-CartSchema.pre('save', function(next) {
-  this.totalQuantity = this.items.reduce((sum, item) => sum + item.quantity, 0);
-  this.totalAmount = this.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-  this.lastUpdated = new Date();
-  next();
-});
-
-// Method to add item to cart
-CartSchema.methods.addItem = function(productId, quantity, price, options) {
+// Method to add an item to the cart
+CartSchema.methods.addItem = async function(productId, quantity, price) {
   const existingItem = this.items.find(item => item.product.toString() === productId.toString());
   
   if (existingItem) {
     existingItem.quantity += quantity;
-    existingItem.price = price;
-    existingItem.selectedOptions = { ...existingItem.selectedOptions, ...options };
   } else {
-    this.items.push({ product: productId, quantity, price, selectedOptions: options });
+    this.items.push({ product: productId, quantity, price });
   }
-
-  return this.save();
+  
+  await this.calculateTotals();
 };
 
-// Method to remove item from cart
-CartSchema.methods.removeItem = function(productId) {
+// Method to remove an item from the cart
+CartSchema.methods.removeItem = async function(productId) {
   this.items = this.items.filter(item => item.product.toString() !== productId.toString());
-  return this.save();
+  await this.calculateTotals();
 };
 
-// Method to clear cart
-CartSchema.methods.clearCart = function() {
+// Method to update item quantity
+CartSchema.methods.updateItemQuantity = async function(productId, newQuantity) {
+  const item = this.items.find(item => item.product.toString() === productId.toString());
+  if (item) {
+    item.quantity = newQuantity;
+    await this.calculateTotals();
+  }
+};
+
+// Method to clear the cart
+CartSchema.methods.clearCart = async function() {
   this.items = [];
-  return this.save();
+  await this.calculateTotals();
 };
 
-// Static method to get cart with populated items
-CartSchema.statics.getPopulatedCart = function(userId) {
-  return this.findOne({ user: userId }).populate('items.product');
+// Method to calculate totals
+CartSchema.methods.calculateTotals = async function() {
+  this.totalQuantity = this.items.reduce((total, item) => total + item.quantity, 0);
+  this.totalPrice = this.items.reduce((total, item) => total + (item.price * item.quantity), 0);
+};
+
+// Static method to get populated cart
+CartSchema.statics.getPopulatedCart = async function(userId) {
+  return this.findOne({ user: userId })
+    .populate('items.product')
+    .exec();
 };
 
 const Cart = mongoose.model('Cart', CartSchema);

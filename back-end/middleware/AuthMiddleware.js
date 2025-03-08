@@ -1,48 +1,53 @@
-import TokenManager from '../config/tokenManager.js';
 import User from '../models/UserModels.js';
+import TokenManager from '../config/tokenManager.js';
 import logger from "../utils/logger.js";
 
 const authMiddleware = async (req, res, next) => {
     try {
-        // Extraction du token depuis le header de la requête
-        const authHeader = req.headers.authorization;
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
-            return res.status(401).json({ error: 'Token manquant ou invalide' });
+        const authHeader = req.header('Authorization');
+
+        if (!authHeader) {
+            logger.warn('Tentative d\'accès sans en-tête d\'autorisation');
+            return res.status(401).json({ error: 'En-tête d\'autorisation manquant' });
         }
 
-        const token = authHeader.split(' ')[1];
+        const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
 
-        // Vérification du token PASETO
+        if (typeof token !== 'string' || !token.startsWith('v3.local.')) {
+            logger.warn('Format de token invalide');
+            return res.status(401).json({ error: 'Format de token invalide' });
+        }
+
+        logger.info(`Token reçu: ${token.substring(0, 20)}...`);
+
         let decodedToken;
         try {
             decodedToken = await TokenManager.verifyToken(token);
+            logger.info('Token déchiffré avec succès');
         } catch (error) {
-            return res.status(401).json({ error: 'Token invalide ou expiré' });
+            logger.error('Erreur lors de la vérification du token:', error);
+            if (error.code === 'ERR_PASETO_DECRYPTION_FAILED') {
+                return res.status(401).json({ error: 'Token invalide ou corrompu' });
+            } else if (error.code === 'ERR_PASETO_CLAIM_INVALID') {
+                return res.status(401).json({ error: 'Token expiré ou invalide' });
+            }
+            return res.status(401).json({ error: 'Erreur lors de la vérification du token' });
         }
 
-        // Vérification si le token est valide dans la base de données
-        const isValidToken = await TokenManager.hasValidToken(decodedToken.id, token, 'access');
-        if (!isValidToken) {
-            return res.status(401).json({ error: 'Token révoqué ou expiré' });
-        }
-
-        // Récupération des informations complètes de l'utilisateur
         const user = await User.findById(decodedToken.id);
         if (!user) {
+            logger.warn(`Utilisateur non trouvé pour l'ID: ${decodedToken.id}`);
             return res.status(404).json({ error: 'Utilisateur non trouvé' });
         }
 
-        // Ajout des informations de l'utilisateur à la requête
-       // Ajout des informations de l'utilisateur à la requête
-req.user = {
-    _id: user._id,
-    id: user._id,
-    role: user.role,
-    isAdmin: user.role.includes('admin'),
-    // Ajoutez d'autres champs nécessaires ici
-};
+        req.user = {
+            _id: user._id,
+            id: user._id.toString(),
+            role: user.role,
+            isAdmin: user.role.includes('admin'),
+        };
 
-        logger.info(`User authenticated: ${user._id}, Role: ${user.role}`);
+        logger.info(`Utilisateur authentifié: ${user._id}, Rôle: ${user.role}`);
 
         next();
     } catch (error) {
@@ -50,36 +55,34 @@ req.user = {
         res.status(500).json({ error: 'Erreur interne du serveur' });
     }
 };
-
-// Verifier le role d'un utilisateur
+// Vérifier le rôle d'un utilisateur
 const checkRole = (...allowedRoles) => {
     return async (req, res, next) => {
         try {
-            logger.info(`Checking role for user ${req.user.id}: Required roles are ${allowedRoles}`);
+            logger.info(`Vérification du rôle pour l'utilisateur ${req.user.id}: Rôles requis sont ${allowedRoles}`);
 
             const user = await User.findById(req.user.id);
             if (!user) {
-                logger.warn(`User not found: ${req.user.id}`);
-                return res.status(404).json({ error: 'User not found' });
+                logger.warn(`Utilisateur non trouvé: ${req.user.id}`);
+                return res.status(404).json({ error: 'Utilisateur non trouvé' });
             }
 
-            logger.info(`User ${user.id} found. User role is ${user.role}`);
+            logger.info(`Utilisateur ${user.id} trouvé. Rôle de l'utilisateur: ${user.role}`);
 
             const userRoles = Array.isArray(user.role) ? user.role : user.role.split(',').map(role => role.trim());
 
             if (!allowedRoles.some(role => userRoles.includes(role))) {
-                logger.warn(`Access denied for user ${user.id}: Insufficient permissions`);
-                return res.status(403).json({ error: 'Access denied. Insufficient permissions.' });
+                logger.warn(`Accès refusé pour l'utilisateur ${user.id}: Permissions insuffisantes`);
+                return res.status(403).json({ error: 'Accès refusé. Permissions insuffisantes.' });
             }
 
-            logger.info(`User ${user.id} has one of the required roles: ${allowedRoles}`);
+            logger.info(`L'utilisateur ${user.id} a l'un des rôles requis: ${allowedRoles}`);
             next();
         } catch (error) {
-            logger.error('Error checking role:', error);
-            res.status(500).json({ error: 'Internal server error' });
+            logger.error('Erreur lors de la vérification du rôle:', error);
+            res.status(500).json({ error: 'Erreur interne du serveur' });
         }
     };
 };
 
-
-export {authMiddleware, checkRole};
+export { authMiddleware, checkRole };
