@@ -45,12 +45,25 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({ email, password }),
+            credentials: 'include', // Ajout pour gérer les cookies
         });
 
         const data = await response.json();
 
         if (!response.ok) {
-            throw new Error(data.message || `HTTP error! status: ${response.status}`);
+            console.error('Login failed with status:', response.status, 'and data:', data);
+            throw new Error(data.error || data.message || `HTTP error! status: ${response.status}`);
+        }
+
+        // Stockage des tokens
+        if (data.accessToken) {
+            localStorage.setItem('accessToken', data.accessToken);
+        }
+        
+        // Vérification de la structure de la réponse
+        if (!data.user) {
+            console.error('Invalid response structure:', data);
+            throw new Error('Format de réponse invalide du serveur');
         }
 
         return {
