@@ -1,59 +1,58 @@
-import React, { useState, useRef, useEffect } from 'react';
-import AccountDropdown from './AccountDropdown';
-import { useAuth } from '../../contexts/AuthContext';
+'use client'
 
-interface NavButtonProps {
-  icon: React.ReactNode;
-  label: string;
-}
+import React from 'react';
 
-const NavButton: React.FC<NavButtonProps> = ({ icon, label }) => {
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const { isLoggedIn } = useAuth();
+// Define button variants and sizes
+type ButtonVariant = 'default' | 'outline' | 'secondary' | 'ghost' | 'link';
+type ButtonSize = 'default' | 'sm' | 'lg' | 'icon';
 
-  const toggleDropdown = () => {
-    setIsDropdownOpen(!isDropdownOpen);
-  };
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsDropdownOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, []);
-
-  if (label === "Compte") {
-    return (
-      <div className="relative" ref={dropdownRef}>
-        <button
-          className="text-white hover:text-gray-200 flex flex-col items-center"
-          aria-label={label}
-          onClick={toggleDropdown}
-        >
-          {icon}
-          <span className="text-xs mt-1">{label}</span>
-        </button>
-        <AccountDropdown isOpen={isDropdownOpen} isLoggedIn={isLoggedIn} /> {/* Modifiez cette ligne */}
-      </div>
-    );
-  }
-
-  return (
-    <button
-      className="text-white hover:text-gray-200 flex flex-col items-center"
-      aria-label={label}
-    >
-      {icon}
-      <span className="text-xs mt-1">{label}</span>
-    </button>
-  );
+// Simple utility to merge class names
+const cn = (...classes: (string | undefined)[]) => {
+  return classes.filter(Boolean).join(' ');
 };
 
-export default NavButton;
+export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: ButtonVariant;
+  size?: ButtonSize;
+}
+
+const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ className, variant = 'default', size = 'default', ...props }, ref) => {
+    // Base classes
+    const baseClasses = "inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none";
+    
+    // Variant classes
+    const variantClasses = {
+      default: "bg-blue-600 text-white hover:bg-blue-700",
+      outline: "border border-gray-300 bg-transparent hover:bg-gray-100",
+      secondary: "bg-gray-200 text-gray-800 hover:bg-gray-300",
+      ghost: "hover:bg-gray-100",
+      link: "underline-offset-4 hover:underline text-blue-600"
+    };
+    
+    // Size classes
+    const sizeClasses = {
+      default: "h-10 py-2 px-4",
+      sm: "h-9 px-3 rounded-md",
+      lg: "h-11 px-8 rounded-md",
+      icon: "h-10 w-10"
+    };
+    
+    return (
+      <button
+        className={cn(
+          baseClasses,
+          variantClasses[variant],
+          sizeClasses[size],
+          className
+        )}
+        ref={ref}
+        {...props}
+      />
+    );
+  }
+);
+
+Button.displayName = "Button";
+
+export { Button };

@@ -15,6 +15,7 @@ export interface AuthContextType {
     isAuthInitialized: boolean;
     registerUser: (userData: RegisterData) => Promise<void>;
     createShopLocal: (shopData: FormData) => Promise<ShopData | null>;
+    isAuthenticated: boolean;
 }
 
 
@@ -32,7 +33,7 @@ export interface RegisterData {
 
 //Interface pour les données de l'utilisateur
 export interface UserData {
-    id?: string; // Added id for identification after login
+    _id?: string; // Added id for identification after login
     fullName: string;
     email: string;
     phone: string;
@@ -42,6 +43,7 @@ export interface UserData {
     lastLogin?: string;
     accessToken?: string;
     refreshToken?: string;
+    shop?: ShopData | null; // Added shop for user's shop after registration'
 
 }
 

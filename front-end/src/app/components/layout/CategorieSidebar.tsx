@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-import Link from 'next/link';
-import { FaChevronDown, FaChevronRight } from 'react-icons/fa';
+import { FaChevronRight } from 'react-icons/fa';
 
 const categories = [
   { name: 'Computer & Office', icon: '💻', subcategories: [

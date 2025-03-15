@@ -16,7 +16,7 @@ const Layout: React.FC<LayoutProps> = ({
   return (
     <>
       {showHeaderFooter && <Header />}
-      <main className={`flex-1 ${useContainer ? 'container mx-auto max-w-screen-2xl ' : ''}`}>
+      <main className={`flex-1 ${useContainer ? 'container mx-auto   ' : ''}`}>
         {useContainer ? (
           <div className="bg-white ">
             {children}

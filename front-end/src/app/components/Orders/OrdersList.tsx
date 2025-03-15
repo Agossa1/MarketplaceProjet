@@ -7,7 +7,8 @@ const OrdersList: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
-  const { accessToken, isAuthenticated } = useAuth();
+  const { accessToken, user } = useAuth();
+  const isAuthenticated = !!user;
 
   useEffect(() => {
     const fetchOrders = async (page: number) => {
@@ -46,7 +47,7 @@ const OrdersList: React.FC = () => {
     <div>
       <h2>Mes Commandes</h2>
       {orders.length === 0 ? (
-        <p>Vous n'avez pas encore de commandes.</p>
+        <p>Vous n&apos;avez pas encore de commandes.</p>
       ) : (
         <div>
           {orders.map((order) => (

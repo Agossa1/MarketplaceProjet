@@ -132,7 +132,7 @@ const DashboardPage: React.FC = () => {
                                 <span className="ml-1">10%</span>
                             </div>
                         </div>
-                        <p className="text-gray-600 mt-2">Vous avez gagné $3,287 aujourd'hui, c'est plus élevé que le mois dernier. Continuez votre bon travail !</p>
+                        <p className="text-gray-600 mt-2">Vous avez gagné $3,287 aujourd&apos;hui, c&apos;est plus élevé que le mois dernier. Continuez votre bon travail !</p>
                     </div>
 
                     {/* Charts */}

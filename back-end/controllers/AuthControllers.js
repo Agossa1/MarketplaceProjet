@@ -89,6 +89,11 @@ const loginUser = async (req, res) => {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
+        // Assurez-vous que shops est un tableau d'ObjectIds valides
+        if (user.shops && Array.isArray(user.shops) && user.shops.length === 0) {
+            user.shops = []; // Réinitialiser à un tableau vide propre
+        }
+
         if (user.isLocked && user.isLocked()) {
             logger.warn(`Attempt to login to locked account: ${email}`);
             return res.status(401).json({ error: 'Account locked. Please try again later or reset your password.' });

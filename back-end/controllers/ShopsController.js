@@ -12,49 +12,49 @@ import slugify from 'slugify';
 
 export const createShop = async (req, res) => {
     try {
-        console.log('Fichiers reçus:', req.files);
         console.log('Données du corps de la requête:', req.body);
 
         let {
             name,
-            description,
             categories,
-            subcategories,
-            address,
-            contactEmail,
-            contactPhone,
-            openingHours,
-            socialMedia,
-            tags
+            subcategories
         } = req.body;
 
         const userId = req.user.id;
-        console.log('userId:', userId)
+        console.log('userId:', userId);
 
-        // Test for name and category
-        console.log('Name:', name);
-        console.log('Categories:', categories);
+        // Récupérer l'utilisateur pour utiliser son email par défaut
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "Utilisateur non trouvé"
+            });
+        }
+        
+        // Vérifier le nombre de boutiques de l'utilisateur
+        const userShopsCount = await Shop.countDocuments({ owner: userId });
+        if (userShopsCount >= 10) {
+            return res.status(400).json({
+                success: false,
+                message: "Vous avez atteint la limite de 10 boutiques par utilisateur"
+            });
+        }
+        
+        // Utiliser OBLIGATOIREMENT l'email de l'utilisateur connecté
+        const contactEmail = user.email;
+        console.log('Email de contact utilisé:', contactEmail);
 
         // Ensure categories and subcategories are arrays
         categories = Array.isArray(categories) ? categories : [categories].filter(Boolean);
         subcategories = Array.isArray(subcategories) ? subcategories : [subcategories].filter(Boolean);
-
-        // Test data
-        console.log('categories:', categories);
-        console.log('subcategories:', subcategories);
-        console.log('description:', description);
-        console.log('contactEmail:', contactEmail);
-        console.log('contactPhone:', contactPhone);
-        console.log('socialMedia:', socialMedia);
-
-        // Validation des données
+        
+        // Validation des données (sans description, contactPhone et openingHours)
         const validationErrors = validateShopData({
             name,
-            description,
             categories,
             subcategories,
-            contactEmail,
-            contactPhone
+            contactEmail
         });
 
         if (validationErrors.length > 0) {
@@ -66,54 +66,47 @@ export const createShop = async (req, res) => {
             });
         }
 
+        // Vérifier si l'utilisateur a déjà une boutique avec ce nom
+        const existingShop = await Shop.findOne({ 
+            owner: userId,
+            name: { $regex: new RegExp(`^${name}$`, 'i') } // Recherche insensible à la casse
+        });
+
+        if (existingShop) {
+            return res.status(400).json({
+                success: false,
+                message: "Vous avez déjà une boutique avec ce nom"
+            });
+        }
+
         // Generate slug from shop name
         const slug = slugify(name, { lower: true });
 
-        // Handle logo and cover image upload
-        let logo, coverImage;
-        if (req.files) {
-            console.log('Uploading images');
-            if (req.files.logo && req.files.logo[0]) {
-                console.log('Uploading logo...');
-                const logoResult = await cloudinaryUploadLogo(req.files.logo[0].buffer);
-                console.log('Logo uploaded:', logoResult);
-                logo = {
-                    url: logoResult.secure_url,
-                    public_id: logoResult.public_id
-                };
-            }
-            if (req.files.coverImage && req.files.coverImage[0]) {
-                console.log('Uploading cover image...');
-                const coverImageResult = await cloudinaryUploadCoverImage(req.files.coverImage[0].buffer);
-                console.log('Cover image uploaded:', coverImageResult);
-                coverImage = {
-                    url: coverImageResult.secure_url,
-                    public_id: coverImageResult.public_id
-                };
-            }
-        }
-
         const newShop = new Shop({
             name,
-            description,
             categories,
             subcategories,
             slug,
             owner: userId,
-            address,
-            contactEmail,
-            contactPhone,
-            openingHours,
-            socialMedia,
-            tags,
-            logo,
-            coverImage
+            contactEmail: contactEmail, // Utiliser l'email de l'utilisateur connecté
+            createdBy: user.fullName || user.username || 'Utilisateur', // Ajouter le nom de l'utilisateur qui a créé la boutique
+            creationDate: new Date(),
+            description: 'Description par défaut de la boutique. Vous pouvez la modifier ultérieurement.' // Ajouter une description par défaut
         });
 
         const savedShop = await newShop.save();
 
         // Mise à jour de l'utilisateur
-        await User.findByIdAndUpdate(userId, { $set: { shop: savedShop._id } });
+        await User.findByIdAndUpdate(userId, { 
+            $push: { shops: savedShop._id },  // Utiliser $push au lieu de $set pour permettre plusieurs boutiques
+            $addToSet: { role: 'seller' }     // Ajouter le rôle de vendeur s'il ne l'a pas déjà
+        });
+
+        // Appeler la méthode pour mettre à jour l'utilisateur après la création de la boutique
+        await savedShop.updateUserAfterShopCreation();
+
+        // Enregistrer l'activité de création de boutique
+        logger.info(`Boutique créée: ${name} par l'utilisateur ${user.email} (ID: ${userId})`);
 
         res.status(201).json({
             success: true,
@@ -141,8 +134,6 @@ export const createShop = async (req, res) => {
         }
     }
 };
-
-
 
 
 export const getAllShops = async (req, res, next) => {
@@ -542,6 +533,61 @@ export const unfollowShop = async (req, res, next) => {
     }
 };
 
+
+// Get Shops bys User ID connected ID
+// Get Shops bys User ID connected ID
+export const getShopByUserId = async (req, res, next) => {
+    try {
+        const userId = req.params.userId || req.user.id;
+
+        // Validate the user ID format
+        if (!mongoose.Types.ObjectId.isValid(userId)) {
+            return next(new AppError('Invalid user ID format', 400));
+        }
+
+        // Find shop by owner ID
+        const shop = await Shop.findOne({ owner: userId })
+            .populate('owner', 'email fullName')
+            .populate('categories', 'name')
+            .lean()
+            .exec();
+
+        if (!shop) {
+            return res.status(404).json({
+                status: 'fail',
+                message: 'No shop found for this user'
+            });
+        }
+
+        // Calculate average rating
+        let averageRating = 'Not rated';
+        if (shop.ratings && Array.isArray(shop.ratings) && shop.ratings.length > 0) {
+            const sum = shop.ratings.reduce((acc, rating) => acc + (rating.value || 0), 0);
+            averageRating = (sum / shop.ratings.length).toFixed(1);
+        }
+
+        // Get total products count
+        const totalProducts = await Product.countDocuments({ shop: shop._id });
+
+        // Format the response
+        const formattedShop = {
+            ...shop,
+            averageRating,
+            totalProducts,
+            isOpen: isShopOpen(shop.openingHours),
+        };
+
+        res.status(200).json({
+            status: 'success',
+            data: {
+                shop: formattedShop
+            }
+        });
+    } catch (error) {
+        console.error('Error in getShopByUserId:', error);
+        next(new AppError(`Error fetching shop by user ID: ${error.message}`, 500));
+    }
+};
 
 
 

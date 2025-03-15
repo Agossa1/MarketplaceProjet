@@ -3,7 +3,7 @@ import {
     createShop,
     deleteShopById, followShop,
     getAllShops,
-    getShopById, reviewShop,
+    getShopById, getShopByUserId, reviewShop,
     unfollowShop,
     updateShopById
 } from "../controllers/ShopsController.js";
@@ -24,5 +24,6 @@ router.delete('/delete-shop/:id', authMiddleware, checkRole('seller', 'admin'), 
 router.post('/shops/:id/follow', authMiddleware, followShop);
 router.post('/shops/:id/unfollow', authMiddleware, unfollowShop);
 router.post('/review-shop/:id/review', authMiddleware, reviewShop);
-
+// Route pour obtenir la boutique d'un utilisateur spécifique
+router.get('/get-shop-by-user-id/:userId', authMiddleware, getShopByUserId);
 export{router as ShopRouter};

@@ -112,7 +112,7 @@ const FormLogin = () => {
             <div className="text-sm text-center mt-6">
                 <span className="text-gray-600">Pas encore de compte ?</span>{' '}
                 <Link href="/contenus/auth/register" className="font-medium text-blue-600 hover:text-blue-500">
-                    S'inscrire
+                    S&apos;inscrire
                 </Link>
             </div>
         </form>

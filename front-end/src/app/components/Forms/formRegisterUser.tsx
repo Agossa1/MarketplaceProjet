@@ -6,7 +6,7 @@ import * as Yup from 'yup';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../contexts/AuthContext';
 import { registerUser, loginUser } from '../../hooks/authServices';
-import { RegisterResponse, LoginResponse, UserData } from '../../types/user';
+import { RegisterResponse, LoginResponse} from '../../types/user';
 import Link from 'next/link';
 import { FaEye, FaEyeSlash } from 'react-icons/fa';
 
@@ -39,23 +39,13 @@ const RegisterForm: React.FC = () => {
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
     const handleSubmit = async (values: FormValues, { setSubmitting, setStatus }: FormikHelpers<FormValues>) => {
-        try {
+              try {
             const response: RegisterResponse = await registerUser(values);
-            if (response.success && response.user) {
-                const loginResponse: LoginResponse = await loginUser(response.user.email, values.password);
-                if (loginResponse.user && loginResponse.accessToken && loginResponse.refreshToken) {
-                    const userData: UserData = {
-                        id: loginResponse.user.id,
-                        email: loginResponse.user.email,
-                        fullName: loginResponse.user.fullName || "",
-                        phone: loginResponse.user.phone || "",
-                        role: loginResponse.user.role || [],
-                        verifiedEmail: loginResponse.user.verifiedEmail,
-                        lastLogin: loginResponse.user.lastLogin,
-                        accessToken: loginResponse.accessToken,
-                        refreshToken: loginResponse.refreshToken,
-                    };
-                    login(userData);
+            if (response.status === 'success' && response.data?.user) {
+                const loginResponse: LoginResponse = await loginUser(response.data.user.email, values.password);
+                if (loginResponse.data?.user && loginResponse.data?.accessToken && loginResponse.data?.refreshToken) {
+                    // Utiliser directement les données pour le login sans créer une variable inutilisée
+                    login(loginResponse.data.accessToken, loginResponse.data.refreshToken);
                     setStatus("Votre compte a bien été créé ! Vous allez être redirigé(e) vers votre profil.");
                     setTimeout(() => {
                         router.push('/contenus/auth/profile');
@@ -94,7 +84,6 @@ const RegisterForm: React.FC = () => {
     };
 
     return (
-
         <div className="flex justify-center items-center h-screen bg-gray-100">
             <div className="bg-white p-8   w-96">
                 <h2 className="text-2xl font-bold mb-2 text-center text-gray-800">Rejoignez-nous !</h2>

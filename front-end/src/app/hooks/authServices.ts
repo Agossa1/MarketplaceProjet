@@ -1,5 +1,5 @@
 import { RegisterData, RegisterResponse, LoginResponse } from '../types/user';
-import Cookies from 'js-cookie';
+
 
 const API_URL = 'http://localhost:5001/api';
 
@@ -48,11 +48,20 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
             credentials: 'include', // Ajout pour gérer les cookies
         });
 
-        const data = await response.json();
+        let data;
+        try {
+            data = await response.json();
+        } catch (e) {
+            console.error('Failed to parse response as JSON:', e);
+            throw new Error(`Erreur de serveur: impossible de traiter la réponse (${response.status})`);
+        }
 
         if (!response.ok) {
             console.error('Login failed with status:', response.status, 'and data:', data);
-            throw new Error(data.error || data.message || `HTTP error! status: ${response.status}`);
+            const errorMessage = data && (data.error || data.message) 
+                ? data.error || data.message 
+                : `Erreur de serveur (${response.status})`;
+            throw new Error(errorMessage);
         }
 
         // Stockage des tokens
@@ -78,7 +87,6 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
         throw error instanceof Error ? error : new Error('Une erreur est survenue lors de la connexion');
     }
 };
-
 /**
  * Refreshes the authentication token.
  * @param refreshToken - The refresh token.
@@ -191,47 +199,5 @@ export const verifyToken = async (accessToken: string): Promise<{ isValid: boole
         console.error("Error verifying token:", error);
         // In case of network errors or other issues, we consider the token invalid
         return { isValid: false };
-    }
-};
-
-/**
- * Sends an authenticated request.
- * @param url - The URL to send the request to.
- * @param method - The HTTP method to use.
- * @param body - The request body (optional).
- * @returns A promise that resolves with the response data.
- * @throws An error if the request fails.
- */
-export const sendAuthenticatedRequest = async (url: string, method: string, body?: any) => {
-    let accessToken = localStorage.getItem('accessToken');
-
-    if (!accessToken) {
-        throw new Error('No access token found');
-    }
-
-
-    const headers = new Headers({
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${accessToken}`
-    });
-
-    const options: RequestInit = {
-        method,
-        headers,
-        body: body ? JSON.stringify(body) : undefined
-    };
-
-    try {
-        const response = await fetch(url, options);
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
-        }
-
-        return await response.json();
-    } catch (error) {
-        console.error('Error in sendAuthenticatedRequest:', error);
-        throw error;
     }
 };

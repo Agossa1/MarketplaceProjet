@@ -9,9 +9,15 @@ const ShopSchema = new mongoose.Schema({
   },
   description: {
     type: String,
-    required: [true, 'La description du magasin est requise'],
     trim: true,
-    minlength: [10, 'La description doit contenir au moins 10 caractères'],
+    required: false,
+    validate: {
+      validator: function(v) {
+        // Si la description est fournie, elle doit avoir au moins 10 caractères
+        return v === '' || v === undefined || v === null || v.length >= 10;
+      },
+      message: 'La description, si fournie, doit contenir au moins 10 caractères'
+    },
     maxlength: [5000, 'La description ne peut pas dépasser 5000 caractères']
   },
 categories: {
@@ -26,7 +32,6 @@ categories: {
 },
   slug: {
     type: String,
-    unique: true,
     lowercase: true
   },
   subcategories: {
@@ -81,7 +86,6 @@ coverImage: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: [true, 'Le propriétaire du magasin est requis'],
-    unique: true
   },
   address: {
     street: String,
@@ -110,13 +114,13 @@ coverImage: {
     default: 'active'
   },
   openingHours: {
-    monday: { open: String, close: String },
-    tuesday: { open: String, close: String },
-    wednesday: { open: String, close: String },
-    thursday: { open: String, close: String },
-    friday: { open: String, close: String },
-    saturday: { open: String, close: String },
-    sunday: { open: String, close: String }
+    monday: { open: { type: String, default: '' }, close: { type: String, default: '' } },
+    tuesday: { open: { type: String, default: '' }, close: { type: String, default: '' } },
+    wednesday: { open: { type: String, default: '' }, close: { type: String, default: '' } },
+    thursday: { open: { type: String, default: '' }, close: { type: String, default: '' } },
+    friday: { open: { type: String, default: '' }, close: { type: String, default: '' } },
+    saturday: { open: { type: String, default: '' }, close: { type: String, default: '' } },
+    sunday: { open: { type: String, default: '' }, close: { type: String, default: '' } }
   },
   contactEmail: {
     type: String,
@@ -124,7 +128,8 @@ coverImage: {
   },
   contactPhone: {
     type: String,
-    match: [/^[+]?[(]?[0-9]{3}[)]?[-\s.]?[0-9]{3}[-\s.]?[0-9]{4,6}$/, 'Veuillez fournir un numéro de téléphone valide']
+    match: [/^[+]?[(]?[0-9]{3}[)]?[-\s.]?[0-9]{3}[-\s.]?[0-9]{4,6}$/, 'Veuillez fournir un numéro de téléphone valide'],
+    default: '' // Valeur par défaut vide
   },
   socialMedia: {
     facebook: String,
@@ -296,6 +301,32 @@ ShopSchema.methods.updateUserAfterShopCreation = async function() {
       { new: true, runValidators: true }
   );
 };
+
+// Fonction pour supprimer l'index unique sur le champ owner
+ShopSchema.statics.removeUniqueOwnerIndex = async function() {
+  try {
+    // Vérifier si l'index existe avant de tenter de le supprimer
+    const indexes = await this.collection.indexes();
+    const ownerUniqueIndex = indexes.find(index =>
+        index.key && index.key.owner === 1 && index.unique === true
+    );
+
+    if (ownerUniqueIndex) {
+      console.log('Suppression de l\'index unique sur le champ owner...');
+      await this.collection.dropIndex('owner_1');
+      console.log('Index unique sur le champ owner supprimé avec succès');
+    } else {
+      console.log('Aucun index unique trouvé sur le champ owner');
+    }
+  } catch (error) {
+    console.error('Erreur lors de la suppression de l\'index unique:', error);
+  }
+};
+
+// Vos autres méthodes virtuelles et hooks existants
+ShopSchema.virtual('logoUrl').get(function() {
+  return this.logo ? `${process.env.BASE_URL}/uploads/shops/${this.logo}` : null;
+});
 
 const Shop = mongoose.model('Shop', ShopSchema);
 

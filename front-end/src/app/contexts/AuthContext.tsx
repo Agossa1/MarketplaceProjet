@@ -254,8 +254,8 @@ const createShopLocal = useCallback(async (shopData: FormData): Promise<ShopData
     }
 
     try {
-        const response: ShopData = await createShop(accessToken, shopData);
-        
+      // Ligne 257
+   const response: ShopData = await createShop(shopData, accessToken);
         // Mise à jour du contexte utilisateur si nécessaire
         if (response && user) {
             const updatedUser = { ...user, shop: response };
@@ -291,19 +291,22 @@ const createShopLocal = useCallback(async (shopData: FormData): Promise<ShopData
     }
 }, [accessToken, user, setUser, refreshAuthToken]);
 
-       // Context de l'authentification
-    const contextValue: AuthContextType = {
-        user,
-        accessToken,
-        login,
-        logout: logoutUser,
-        isLoading,
-        error,
-        verifyToken,
-        refreshToken: refreshAuthToken,
-        checkAuthStatus,
-        isAuthInitialized,
-    };
+// Remplacez la définition actuelle de contextValue par celle-ci
+const contextValue: AuthContextType = {
+    user,
+    accessToken,
+    login,
+    logout: logoutUser,
+    isLoading,
+    error,
+    verifyToken,
+    refreshToken: refreshAuthToken,
+    checkAuthStatus,
+    isAuthInitialized,
+    registerUser,
+    createShopLocal, // Utilisez directement la fonction que vous avez définie
+    isAuthenticated: !!user, // Convertit user en booléen
+};
 
     return (
         <AuthContext.Provider value={contextValue}>

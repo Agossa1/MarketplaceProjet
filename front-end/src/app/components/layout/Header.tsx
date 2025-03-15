@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { FaShoppingCart, FaUser, FaMapMarkerAlt, FaPhone, FaChevronDown, FaBars, FaSearch } from 'react-icons/fa';
-import { MdLocationOn } from 'react-icons/md';
+import { FaShoppingCart, FaUser, FaChevronDown, FaBars, FaSearch } from 'react-icons/fa';
 import Link from 'next/link';
 import AccountDropdown from '../common/AccountDropdown';
 
@@ -37,22 +36,7 @@ const Header = () => {
   }, []);
 
   return (
-    <header className="bg-white text-black">
-      {/* Top bar - mobile */}
-      <div className="md:hidden container mx-auto px-4 py-2 flex justify-between items-center">
-        <div className="flex items-center">
-          <span className="mr-2">🇺🇸</span>
-          <span>English (USA)</span>
-        </div>
-        <div className="flex items-center">
-          <MdLocationOn className="mr-1" />
-          <span>Location</span>
-        </div>
-        <div className="flex items-center">
-        <Link href='/contenus/shop/Createt-Shop' >Vendre sur Tokpa</Link>
-
-        </div>
-      </div>
+    <header className="bg-orange-500 text-white">
 
       {/* Main bar - mobile */}
       <div className="md:hidden container mx-auto px-4 py-3 flex items-center justify-between">
@@ -113,28 +97,9 @@ const Header = () => {
 
       {/* Desktop header */}
       <div className="hidden md:block">
-        {/* Top bar */}
-        <div className="bg-black text-white py-2">
-          <div className="container mx-auto px-6 flex justify-between items-center">
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center">
-                <FaMapMarkerAlt className="mr-2" />
-                <span>Deliver to</span>
-              </div>
-              <div className="flex items-center">
-                <FaPhone className="mr-2" />
-                <span>+1 234 567 890</span>
-              </div>
-            </div>
-            <div className="flex items-center space-x-4">
-              <span>🇺🇸 English (USA)</span>
-              <span>USD $</span>
-            </div>
-          </div>
-        </div>
 
         {/* Main bar */}
-        <div className="container mx-auto px-6 py-4 flex justify-between items-center">
+        <div className="container min-w-full px-6 py-4 flex justify-between items-center">
           <Link href="/">
             <div className="flex items-center">
               <h1 className="text-2xl font-bold">TOKPA MARKET</h1>
@@ -157,7 +122,7 @@ const Header = () => {
           </div>
 
           <div className="flex items-center space-x-4">
-            <button className="flex items-center text-black">
+            <button className="flex items-center text-white">
               <FaShoppingCart className="mr-2 text-xl" />
               <span className="font-medium">My Cart</span>
               <FaChevronDown className="ml-1 text-xs" />
@@ -165,7 +130,7 @@ const Header = () => {
             </button>
             <div ref={accountDropdownRef} className="relative">
               <div 
-                className="flex items-center text-black cursor-pointer" 
+                className="flex items-center text-white cursor-pointer"
                 onClick={toggleAccountDropdown}
               >
                 <FaUser className="mr-2 text-xl" />
@@ -179,7 +144,7 @@ const Header = () => {
 
         {/* Main navigation */}
         <nav className="bg-gray-100 border-t border-gray-200">
-          <div className="container mx-auto py-2 px-6">
+          <div className="container py-2 px-6">
             <ul className="flex space-x-6">
               <li>
                 <Link href="#" className="text-black hover:text-gray-600 font-medium flex items-center">

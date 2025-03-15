@@ -9,6 +9,7 @@ export interface ShopData {
     shopLogo?: File | null;
     coverImage?: File | null;
     images?: File[];
+    logo?: string;
     address?: {
         street?: string;
         city?: string;

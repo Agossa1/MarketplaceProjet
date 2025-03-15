@@ -8,12 +8,26 @@ export interface Order {
         price: number;
         discountApplied?: number;
     }[];
-    shippingAddress: any; // À définir plus précisément
+    shippingAddress: ShippingAddress; // Type correctement défini
     paymentMethod: string;
     totalAmount: number;
     createdAt: Date;
     updatedAt: Date;
     status: string;
+}
+
+// Définition de l'interface pour l'adresse de livraison
+export interface ShippingAddress {
+    fullName: string;
+    addressLine1: string;
+    addressLine2?: string;
+    city: string;
+    state?: string;
+    postalCode: string;
+    country: string;
+    phoneNumber?: string;
+    email?: string;
+    instructions?: string;
 }
 
 // Definition de l'interface de retour

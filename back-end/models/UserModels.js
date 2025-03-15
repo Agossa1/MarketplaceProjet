@@ -35,10 +35,10 @@ const UserSchema = new mongoose.Schema({
         }
     },
     role: {
-    type: [String],
-    enum: ['buyer', 'seller', 'admin'],
-    default: ['buyer']
-},
+        type: [String],
+        enum: ['admin', 'seller', 'buyer'],
+        default: ['buyer']
+    },
     wishList: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Product'
@@ -86,8 +86,9 @@ const UserSchema = new mongoose.Schema({
         default: null
     },
     shops: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Shop'
+        type: [mongoose.Schema.Types.ObjectId],
+        ref: 'Shop',
+        default: []
     },
     passwordResetToken: String,
     passwordResetExpires: Date,
@@ -268,6 +269,16 @@ UserSchema.methods.incrementLoginAttempts = function() {
     return this.save();
 };
 
+// Ajoutez un middleware pre-save pour nettoyer les données
+UserSchema.pre('save', function(next) {
+    // S'assurer que shops est toujours un tableau
+    if (!this.shops) this.shops = [];
+
+    // S'assurer que role est toujours un tableau
+    if (!this.role) this.role = ['buyer'];
+
+    next();
+});
 // Method to reset login attempts
 UserSchema.methods.resetLoginAttempts = function() {
     this.loginAttempts = 0;

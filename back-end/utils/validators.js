@@ -38,27 +38,57 @@ export const validateToken = (token) => {
   return isValid;
 };
 
-export const validateShopData = (shopData) => {
+// Ajouter ces fonctions de validation en haut du fichier
+const isValidEmail = (email) => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+};
+
+const isValidPhone = (phone) => {
+    // Accepte les formats internationaux et nationaux avec ou sans espaces/tirets
+    const phoneRegex = /^(\+\d{1,3}[- ]?)?\d{8,15}$/;
+    return phoneRegex.test(phone);
+};
+
+export const validateShopData = (data) => {
     const errors = [];
 
-    if (!shopData.name || shopData.name.length < 3) {
-        errors.push('Le nom du magasin doit contenir au moins 3 caractères');
+    // Validation du nom
+    if (!data.name || data.name.trim() === '') {
+        errors.push('Le nom du magasin est requis');
+    } else if (data.name.length < 3 || data.name.length > 50) {
+        errors.push('Le nom du magasin doit contenir entre 3 et 50 caractères');
     }
 
-    if (!shopData.description || shopData.description.length < 10) {
-        errors.push('La description doit contenir au moins 10 caractères');
+
+
+    // Validation des catégories
+    if (!data.categories || !Array.isArray(data.categories) || data.categories.length === 0) {
+        errors.push('Au moins une catégorie est requise');
     }
 
-    if (!shopData.categories || !Array.isArray(shopData.categories) || shopData.categories.length === 0) {
-        errors.push('Au moins une catégorie doit être sélectionnée');
+    // Validation de l'email de contact
+    if (!data.contactEmail || !isValidEmail(data.contactEmail)) {
+        errors.push('Un email de contact valide est requis');
     }
 
-    if (shopData.contactEmail && !validateEmail(shopData.contactEmail)) {
-        errors.push('L\'adresse email de contact n\'est pas valide');
+    // Validation du téléphone de contact - rendue optionnelle
+    if (data.contactPhone && !isValidPhone(data.contactPhone)) {
+        errors.push('Le numéro de téléphone de contact doit être valide');
     }
 
-    if (shopData.contactPhone && !/^[+]?[(]?[0-9]{3}[)]?[-\s.]?[0-9]{3}[-\s.]?[0-9]{4,6}$/.test(shopData.contactPhone)) {
-        errors.push('Le numéro de téléphone de contact n\'est pas valide');
+    // Validation des horaires d'ouverture - rendue optionnelle
+    if (data.openingHours) {
+        if (!Array.isArray(data.openingHours) || data.openingHours.length === 0) {
+            errors.push('Les horaires d\'ouverture doivent être un tableau non vide');
+        } else {
+            // Vérifier que chaque jour a un format valide
+            for (const day of data.openingHours) {
+                if (!day.day || !day.open || !day.close) {
+                    errors.push('Chaque jour doit avoir un nom, une heure d\'ouverture et une heure de fermeture');
+                }
+            }
+        }
     }
 
     return errors;

@@ -10,6 +10,8 @@ import connectDB from "./config/database.js";
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 
+import Shop from './models/ShopModels.js';
+
 // Import routes
 import {UserRouter} from "./routes/UserRoutes.js";
 import {ProductRouter} from "./routes/ProductRouters.js";
@@ -55,6 +57,14 @@ app.use(limiter);
 
 // Handle OPTIONS preflight requests
 app.options('*', cors(corsOptions));
+
+try {
+    await Shop.removeUniqueOwnerIndex();
+    console.log('Index unique sur le champ owner vérifié/supprimé');
+} catch (error) {
+    console.error('Erreur lors de la suppression de l\'index:', error);
+}
+
 
 // Routes
 app.use('/api/users', UserRouter);
